@@ -1,0 +1,640 @@
+# # """CRUD API routes for Knowledge Bases."""
+
+# # from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+# # from sqlalchemy.orm import Session
+# # from database import get_db
+# # from models import KnowledgeBase, KBEntry, Agent
+# # from schemas import KBCreate, KBUpdate, KBResponse, KBEntryCreate, KBEntryResponse
+# # from services.file_processor import process_file
+# # from services.embeddings import embed_and_store
+# # from services.sheets_sync import sync_dynamic_kb
+# # from datetime import datetime, timezone
+
+# # router = APIRouter(prefix="/api/kb", tags=["knowledge_base"])
+
+
+# # @router.post("/", response_model=KBResponse)
+# # async def create_knowledge_base(kb: KBCreate, agent_id: str,
+# #                                  db: Session = Depends(get_db)):
+# #     """Create a new knowledge base for an agent."""
+# #     agent = db.query(Agent).filter(Agent.id == agent_id).first()
+# #     if not agent:
+# #         raise HTTPException(status_code=404, detail="Agent not found")
+
+# #     db_kb = KnowledgeBase(
+# #         agent_id=agent_id,
+# #         name=kb.name,
+# #         kb_type=kb.kb_type,
+# #         source_url=kb.source_url,
+# #         sync_interval=kb.sync_interval
+# #     )
+# #     db.add(db_kb)
+# #     db.commit()
+# #     db.refresh(db_kb)
+
+# #     # If dynamic, trigger initial sync
+# #     if kb.kb_type == "dynamic" and kb.source_url:
+# #         try:
+# #             await sync_dynamic_kb(db_kb.id, kb.source_url, db)
+# #         except Exception as e:
+# #             print(f"Initial sync error: {e}")
+
+# #     entry_count = db.query(KBEntry).filter(KBEntry.kb_id == db_kb.id).count()
+# #     return KBResponse(
+# #         id=db_kb.id, agent_id=db_kb.agent_id, name=db_kb.name,
+# #         kb_type=db_kb.kb_type, source_url=db_kb.source_url,
+# #         sync_interval=db_kb.sync_interval,
+# #         created_at=db_kb.created_at, updated_at=db_kb.updated_at,
+# #         entry_count=entry_count
+# #     )
+
+
+# # @router.get("/agent/{agent_id}", response_model=list[KBResponse])
+# # async def list_knowledge_bases(agent_id: str, db: Session = Depends(get_db)):
+# #     """List all knowledge bases for an agent."""
+# #     kbs = db.query(KnowledgeBase).filter(
+# #         KnowledgeBase.agent_id == agent_id
+# #     ).order_by(KnowledgeBase.created_at.desc()).all()
+
+# #     result = []
+# #     for kb in kbs:
+# #         entry_count = db.query(KBEntry).filter(KBEntry.kb_id == kb.id).count()
+# #         result.append(KBResponse(
+# #             id=kb.id, agent_id=kb.agent_id, name=kb.name,
+# #             kb_type=kb.kb_type, source_url=kb.source_url,
+# #             sync_interval=kb.sync_interval,
+# #             created_at=kb.created_at, updated_at=kb.updated_at,
+# #             entry_count=entry_count
+# #         ))
+# #     return result
+
+
+# # @router.get("/{kb_id}", response_model=KBResponse)
+# # async def get_knowledge_base(kb_id: str, db: Session = Depends(get_db)):
+# #     """Get a single knowledge base."""
+# #     kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+# #     if not kb:
+# #         raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+# #     entry_count = db.query(KBEntry).filter(KBEntry.kb_id == kb.id).count()
+# #     return KBResponse(
+# #         id=kb.id, agent_id=kb.agent_id, name=kb.name,
+# #         kb_type=kb.kb_type, source_url=kb.source_url,
+# #         sync_interval=kb.sync_interval,
+# #         created_at=kb.created_at, updated_at=kb.updated_at,
+# #         entry_count=entry_count
+# #     )
+
+
+# # @router.put("/{kb_id}", response_model=KBResponse)
+# # async def update_knowledge_base(kb_id: str, update: KBUpdate,
+# #                                  db: Session = Depends(get_db)):
+# #     """Update a knowledge base."""
+# #     kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+# #     if not kb:
+# #         raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+# #     update_data = update.model_dump(exclude_unset=True)
+# #     for key, value in update_data.items():
+# #         setattr(kb, key, value)
+
+# #     kb.updated_at = datetime.now(timezone.utc)
+# #     db.commit()
+# #     db.refresh(kb)
+
+# #     entry_count = db.query(KBEntry).filter(KBEntry.kb_id == kb.id).count()
+# #     return KBResponse(
+# #         id=kb.id, agent_id=kb.agent_id, name=kb.name,
+# #         kb_type=kb.kb_type, source_url=kb.source_url,
+# #         sync_interval=kb.sync_interval,
+# #         created_at=kb.created_at, updated_at=kb.updated_at,
+# #         entry_count=entry_count
+# #     )
+
+
+# # @router.delete("/{kb_id}")
+# # async def delete_knowledge_base(kb_id: str, db: Session = Depends(get_db)):
+# #     """Delete a knowledge base and its entries."""
+# #     kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+# #     if not kb:
+# #         raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+# #     db.delete(kb)
+# #     db.commit()
+# #     return {"message": "Knowledge base deleted", "id": kb_id}
+
+
+# # @router.post("/{kb_id}/upload")
+# # async def upload_file(kb_id: str, file: UploadFile = File(...),
+# #                       db: Session = Depends(get_db)):
+# #     """Upload a file (CSV, PDF, Excel) to a knowledge base."""
+# #     kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+# #     if not kb:
+# #         raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+# #     contents = await file.read()
+# #     chunks = process_file(contents, file.filename)
+
+# #     if not chunks:
+# #         raise HTTPException(status_code=400,
+# #                           detail="Could not extract content from file")
+
+# #     entries_created = 0
+# #     for chunk in chunks:
+# #         await embed_and_store(
+# #             content=chunk["content"],
+# #             kb_id=kb_id,
+# #             source=chunk["source"],
+# #             chunk_index=chunk["index"],
+# #             db=db
+# #         )
+# #         entries_created += 1
+
+# #     return {
+# #         "message": f"Processed {entries_created} chunks from {file.filename}",
+# #         "entries_created": entries_created
+# #     }
+
+
+# # @router.post("/{kb_id}/entries", response_model=KBEntryResponse)
+# # async def add_manual_entry(kb_id: str, entry: KBEntryCreate,
+# #                            db: Session = Depends(get_db)):
+# #     """Add a manual text entry to a knowledge base."""
+# #     kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+# #     if not kb:
+# #         raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+# #     db_entry = await embed_and_store(
+# #         content=entry.content,
+# #         kb_id=kb_id,
+# #         source=entry.source_file or "manual",
+# #         chunk_index=0,
+# #         db=db
+# #     )
+
+# #     return KBEntryResponse(
+# #         id=db_entry.id, kb_id=db_entry.kb_id,
+# #         content=db_entry.content, source_file=db_entry.source_file,
+# #         chunk_index=db_entry.chunk_index, created_at=db_entry.created_at
+# #     )
+
+
+# # @router.get("/{kb_id}/entries", response_model=list[KBEntryResponse])
+# # async def list_entries(kb_id: str, db: Session = Depends(get_db)):
+# #     """List all entries in a knowledge base."""
+# #     entries = db.query(KBEntry).filter(
+# #         KBEntry.kb_id == kb_id
+# #     ).order_by(KBEntry.chunk_index).all()
+
+# #     return [KBEntryResponse(
+# #         id=e.id, kb_id=e.kb_id, content=e.content,
+# #         source_file=e.source_file, chunk_index=e.chunk_index,
+# #         created_at=e.created_at
+# #     ) for e in entries]
+
+
+# # @router.delete("/{kb_id}/entries/{entry_id}")
+# # async def delete_entry(kb_id: str, entry_id: str,
+# #                        db: Session = Depends(get_db)):
+# #     """Delete a single KB entry."""
+# #     entry = db.query(KBEntry).filter(
+# #         KBEntry.id == entry_id, KBEntry.kb_id == kb_id
+# #     ).first()
+# #     if not entry:
+# #         raise HTTPException(status_code=404, detail="Entry not found")
+
+# #     db.delete(entry)
+# #     db.commit()
+# #     return {"message": "Entry deleted", "id": entry_id}
+
+
+# # @router.post("/{kb_id}/sync")
+# # async def sync_sheets(kb_id: str, db: Session = Depends(get_db)):
+# #     """Manually trigger a sync for a dynamic knowledge base."""
+# #     kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+# #     if not kb:
+# #         raise HTTPException(status_code=404, detail="Knowledge base not found")
+# #     if kb.kb_type != "dynamic" or not kb.source_url:
+# #         raise HTTPException(status_code=400,
+# #                           detail="Not a dynamic knowledge base")
+
+# #     count = await sync_dynamic_kb(kb.id, kb.source_url, db)
+# #     return {"message": f"Synced {count} entries from Google Sheets", "entries": count}
+
+
+# """CRUD API routes for Knowledge Bases."""
+
+# from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+# from sqlalchemy.orm import Session
+# from database import get_db
+# from models import KnowledgeBase, KBEntry, Agent
+# from schemas import KBCreate, KBUpdate, KBResponse, KBEntryCreate, KBEntryResponse
+# from services.file_processor import process_file
+# from services.embeddings import embed_and_store
+# from services.enhanced_rag import embed_and_store_chunked
+# from services.sheets_sync import sync_dynamic_kb
+# from datetime import datetime, timezone
+
+# router = APIRouter(prefix="/api/kb", tags=["knowledge_base"])
+
+
+# @router.post("/", response_model=KBResponse)
+# async def create_knowledge_base(kb: KBCreate, agent_id: str,
+#                                  db: Session = Depends(get_db)):
+#     """Create a new knowledge base for an agent."""
+#     agent = db.query(Agent).filter(Agent.id == agent_id).first()
+#     if not agent:
+#         raise HTTPException(status_code=404, detail="Agent not found")
+
+#     db_kb = KnowledgeBase(
+#         agent_id=agent_id,
+#         name=kb.name,
+#         kb_type=kb.kb_type,
+#         source_url=kb.source_url,
+#         sync_interval=kb.sync_interval
+#     )
+#     db.add(db_kb)
+#     db.commit()
+#     db.refresh(db_kb)
+
+#     # If dynamic, trigger initial sync
+#     if kb.kb_type == "dynamic" and kb.source_url:
+#         try:
+#             await sync_dynamic_kb(db_kb.id, kb.source_url, db)
+#         except Exception as e:
+#             print(f"Initial sync error: {e}")
+
+#     entry_count = db.query(KBEntry).filter(KBEntry.kb_id == db_kb.id).count()
+#     return KBResponse(
+#         id=db_kb.id, agent_id=db_kb.agent_id, name=db_kb.name,
+#         kb_type=db_kb.kb_type, source_url=db_kb.source_url,
+#         sync_interval=db_kb.sync_interval,
+#         created_at=db_kb.created_at, updated_at=db_kb.updated_at,
+#         entry_count=entry_count
+#     )
+
+
+# @router.get("/agent/{agent_id}", response_model=list[KBResponse])
+# async def list_knowledge_bases(agent_id: str, db: Session = Depends(get_db)):
+#     """List all knowledge bases for an agent."""
+#     kbs = db.query(KnowledgeBase).filter(
+#         KnowledgeBase.agent_id == agent_id
+#     ).order_by(KnowledgeBase.created_at.desc()).all()
+
+#     result = []
+#     for kb in kbs:
+#         entry_count = db.query(KBEntry).filter(KBEntry.kb_id == kb.id).count()
+#         result.append(KBResponse(
+#             id=kb.id, agent_id=kb.agent_id, name=kb.name,
+#             kb_type=kb.kb_type, source_url=kb.source_url,
+#             sync_interval=kb.sync_interval,
+#             created_at=kb.created_at, updated_at=kb.updated_at,
+#             entry_count=entry_count
+#         ))
+#     return result
+
+
+# @router.get("/{kb_id}", response_model=KBResponse)
+# async def get_knowledge_base(kb_id: str, db: Session = Depends(get_db)):
+#     """Get a single knowledge base."""
+#     kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+#     if not kb:
+#         raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+#     entry_count = db.query(KBEntry).filter(KBEntry.kb_id == kb.id).count()
+#     return KBResponse(
+#         id=kb.id, agent_id=kb.agent_id, name=kb.name,
+#         kb_type=kb.kb_type, source_url=kb.source_url,
+#         sync_interval=kb.sync_interval,
+#         created_at=kb.created_at, updated_at=kb.updated_at,
+#         entry_count=entry_count
+#     )
+
+
+# @router.put("/{kb_id}", response_model=KBResponse)
+# async def update_knowledge_base(kb_id: str, update: KBUpdate,
+#                                  db: Session = Depends(get_db)):
+#     """Update a knowledge base."""
+#     kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+#     if not kb:
+#         raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+#     update_data = update.model_dump(exclude_unset=True)
+#     for key, value in update_data.items():
+#         setattr(kb, key, value)
+
+#     kb.updated_at = datetime.now(timezone.utc)
+#     db.commit()
+#     db.refresh(kb)
+
+#     entry_count = db.query(KBEntry).filter(KBEntry.kb_id == kb.id).count()
+#     return KBResponse(
+#         id=kb.id, agent_id=kb.agent_id, name=kb.name,
+#         kb_type=kb.kb_type, source_url=kb.source_url,
+#         sync_interval=kb.sync_interval,
+#         created_at=kb.created_at, updated_at=kb.updated_at,
+#         entry_count=entry_count
+#     )
+
+
+# @router.delete("/{kb_id}")
+# async def delete_knowledge_base(kb_id: str, db: Session = Depends(get_db)):
+#     """Delete a knowledge base and its entries."""
+#     kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+#     if not kb:
+#         raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+#     db.delete(kb)
+#     db.commit()
+#     return {"message": "Knowledge base deleted", "id": kb_id}
+
+
+# @router.post("/{kb_id}/upload")
+# async def upload_file(kb_id: str, file: UploadFile = File(...),
+#                       db: Session = Depends(get_db)):
+#     """Upload a file (CSV, PDF, Excel) to a knowledge base."""
+#     kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+#     if not kb:
+#         raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+#     contents = await file.read()
+#     chunks = process_file(contents, file.filename)
+
+#     if not chunks:
+#         raise HTTPException(status_code=400,
+#                           detail="Could not extract content from file")
+
+#     # Use enhanced smart-chunked ingestion for better RAG quality
+#     all_text = "".join([c["content"] for c in chunks])
+#     stored = await embed_and_store_chunked(
+#         text=all_text,
+#         kb_id=kb_id,
+#         source=file.filename,
+#         db=db,
+#     )
+#     return {
+#         "message": f"Processed {len(stored)} smart chunks from {file.filename}",
+#         "entries_created": len(stored)
+#     }
+
+
+# @router.post("/{kb_id}/entries", response_model=KBEntryResponse)
+# async def add_manual_entry(kb_id: str, entry: KBEntryCreate,
+#                            db: Session = Depends(get_db)):
+#     """Add a manual text entry to a knowledge base."""
+#     kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+#     if not kb:
+#         raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+#     db_entry = await embed_and_store(
+#         content=entry.content,
+#         kb_id=kb_id,
+#         source=entry.source_file or "manual",
+#         chunk_index=0,
+#         db=db
+#     )
+
+#     return KBEntryResponse(
+#         id=db_entry.id, kb_id=db_entry.kb_id,
+#         content=db_entry.content, source_file=db_entry.source_file,
+#         chunk_index=db_entry.chunk_index, created_at=db_entry.created_at
+#     )
+
+
+# @router.get("/{kb_id}/entries", response_model=list[KBEntryResponse])
+# async def list_entries(kb_id: str, db: Session = Depends(get_db)):
+#     """List all entries in a knowledge base."""
+#     entries = db.query(KBEntry).filter(
+#         KBEntry.kb_id == kb_id
+#     ).order_by(KBEntry.chunk_index).all()
+
+#     return [KBEntryResponse(
+#         id=e.id, kb_id=e.kb_id, content=e.content,
+#         source_file=e.source_file, chunk_index=e.chunk_index,
+#         created_at=e.created_at
+#     ) for e in entries]
+
+
+# @router.delete("/{kb_id}/entries/{entry_id}")
+# async def delete_entry(kb_id: str, entry_id: str,
+#                        db: Session = Depends(get_db)):
+#     """Delete a single KB entry."""
+#     entry = db.query(KBEntry).filter(
+#         KBEntry.id == entry_id, KBEntry.kb_id == kb_id
+#     ).first()
+#     if not entry:
+#         raise HTTPException(status_code=404, detail="Entry not found")
+
+#     db.delete(entry)
+#     db.commit()
+#     return {"message": "Entry deleted", "id": entry_id}
+
+
+# @router.post("/{kb_id}/sync")
+# async def sync_sheets(kb_id: str, db: Session = Depends(get_db)):
+#     """Manually trigger a sync for a dynamic knowledge base."""
+#     kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+#     if not kb:
+#         raise HTTPException(status_code=404, detail="Knowledge base not found")
+#     if kb.kb_type != "dynamic" or not kb.source_url:
+#         raise HTTPException(status_code=400,
+#                           detail="Not a dynamic knowledge base")
+
+#     count = await sync_dynamic_kb(kb.id, kb.source_url, db)
+#     return {"message": f"Synced {count} entries from Google Sheets", "entries": count}
+
+
+"""CRUD API routes for Knowledge Bases — company-scoped."""
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from sqlalchemy.orm import Session
+from database import get_db
+from models import KnowledgeBase, KBEntry, Agent, Company
+from schemas import KBCreate, KBUpdate, KBResponse, KBEntryCreate, KBEntryResponse
+from services.file_processor import process_file
+from services.embeddings import embed_and_store
+from services.enhanced_rag import embed_and_store_chunked
+from services.sheets_sync import sync_dynamic_kb
+from services.auth_service import get_current_company
+from datetime import datetime, timezone
+
+router = APIRouter(prefix="/api/kb", tags=["knowledge_base"])
+
+
+def _assert_agent_owned(agent_id: str, company_id: str, db: Session) -> Agent:
+    """Ensure the agent belongs to this company."""
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.company_id == company_id
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
+
+
+def _assert_kb_owned(kb_id: str, company_id: str, db: Session) -> KnowledgeBase:
+    """Ensure the KB's agent belongs to this company."""
+    kb = db.query(KnowledgeBase).join(Agent).filter(
+        KnowledgeBase.id == kb_id,
+        Agent.company_id == company_id
+    ).first()
+    if not kb:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+    return kb
+
+
+def _kb_response(kb: KnowledgeBase, db: Session) -> KBResponse:
+    count = db.query(KBEntry).filter(KBEntry.kb_id == kb.id).count()
+    return KBResponse(
+        id=kb.id, agent_id=kb.agent_id, name=kb.name,
+        kb_type=kb.kb_type, source_url=kb.source_url,
+        sync_interval=kb.sync_interval,
+        created_at=kb.created_at, updated_at=kb.updated_at,
+        entry_count=count,
+    )
+
+
+@router.post("/", response_model=KBResponse, status_code=201)
+async def create_knowledge_base(
+    kb: KBCreate, agent_id: str,
+    db: Session = Depends(get_db),
+    company: Company = Depends(get_current_company),
+):
+    _assert_agent_owned(agent_id, company.id, db)
+    db_kb = KnowledgeBase(
+        agent_id=agent_id, name=kb.name, kb_type=kb.kb_type,
+        source_url=kb.source_url, sync_interval=kb.sync_interval,
+    )
+    db.add(db_kb); db.commit(); db.refresh(db_kb)
+
+    if kb.kb_type == "dynamic" and kb.source_url:
+        try:
+            await sync_dynamic_kb(db_kb.id, kb.source_url, db)
+        except Exception as e:
+            print(f"Initial sync error: {e}")
+
+    return _kb_response(db_kb, db)
+
+
+@router.get("/agent/{agent_id}", response_model=list[KBResponse])
+async def list_knowledge_bases(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    company: Company = Depends(get_current_company),
+):
+    _assert_agent_owned(agent_id, company.id, db)
+    kbs = db.query(KnowledgeBase).filter(
+        KnowledgeBase.agent_id == agent_id
+    ).order_by(KnowledgeBase.created_at.desc()).all()
+    return [_kb_response(kb, db) for kb in kbs]
+
+
+@router.get("/{kb_id}", response_model=KBResponse)
+async def get_knowledge_base(
+    kb_id: str,
+    db: Session = Depends(get_db),
+    company: Company = Depends(get_current_company),
+):
+    kb = _assert_kb_owned(kb_id, company.id, db)
+    return _kb_response(kb, db)
+
+
+@router.put("/{kb_id}", response_model=KBResponse)
+async def update_knowledge_base(
+    kb_id: str, update: KBUpdate,
+    db: Session = Depends(get_db),
+    company: Company = Depends(get_current_company),
+):
+    kb = _assert_kb_owned(kb_id, company.id, db)
+    for key, value in update.model_dump(exclude_unset=True).items():
+        setattr(kb, key, value)
+    kb.updated_at = datetime.now(timezone.utc)
+    db.commit(); db.refresh(kb)
+    return _kb_response(kb, db)
+
+
+@router.delete("/{kb_id}")
+async def delete_knowledge_base(
+    kb_id: str,
+    db: Session = Depends(get_db),
+    company: Company = Depends(get_current_company),
+):
+    kb = _assert_kb_owned(kb_id, company.id, db)
+    db.delete(kb); db.commit()
+    return {"message": "Knowledge base deleted", "id": kb_id}
+
+
+@router.post("/{kb_id}/upload")
+async def upload_file(
+    kb_id: str, file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    company: Company = Depends(get_current_company),
+):
+    kb = _assert_kb_owned(kb_id, company.id, db)
+    contents = await file.read()
+    chunks = process_file(contents, file.filename)
+    if not chunks:
+        raise HTTPException(status_code=400, detail="Could not extract content from file")
+
+    all_text = "\n\n".join([c["content"] for c in chunks])
+    stored = await embed_and_store_chunked(text=all_text, kb_id=kb_id, source=file.filename, db=db)
+    return {"message": f"Processed {len(stored)} smart chunks from {file.filename}", "entries_created": len(stored)}
+
+
+@router.post("/{kb_id}/entries", response_model=KBEntryResponse)
+async def add_manual_entry(
+    kb_id: str, entry: KBEntryCreate,
+    db: Session = Depends(get_db),
+    company: Company = Depends(get_current_company),
+):
+    _assert_kb_owned(kb_id, company.id, db)
+    db_entry = await embed_and_store(
+        content=entry.content, kb_id=kb_id,
+        source=entry.source_file or "manual", chunk_index=0, db=db
+    )
+    return KBEntryResponse(
+        id=db_entry.id, kb_id=db_entry.kb_id, content=db_entry.content,
+        source_file=db_entry.source_file, chunk_index=db_entry.chunk_index,
+        created_at=db_entry.created_at,
+    )
+
+
+@router.get("/{kb_id}/entries", response_model=list[KBEntryResponse])
+async def list_entries(
+    kb_id: str,
+    db: Session = Depends(get_db),
+    company: Company = Depends(get_current_company),
+):
+    _assert_kb_owned(kb_id, company.id, db)
+    entries = db.query(KBEntry).filter(KBEntry.kb_id == kb_id).order_by(KBEntry.chunk_index).all()
+    return [KBEntryResponse(
+        id=e.id, kb_id=e.kb_id, content=e.content,
+        source_file=e.source_file, chunk_index=e.chunk_index, created_at=e.created_at
+    ) for e in entries]
+
+
+@router.delete("/{kb_id}/entries/{entry_id}")
+async def delete_entry(
+    kb_id: str, entry_id: str,
+    db: Session = Depends(get_db),
+    company: Company = Depends(get_current_company),
+):
+    _assert_kb_owned(kb_id, company.id, db)
+    entry = db.query(KBEntry).filter(KBEntry.id == entry_id, KBEntry.kb_id == kb_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    db.delete(entry); db.commit()
+    return {"message": "Entry deleted", "id": entry_id}
+
+
+@router.post("/{kb_id}/sync")
+async def sync_sheets(
+    kb_id: str,
+    db: Session = Depends(get_db),
+    company: Company = Depends(get_current_company),
+):
+    kb = _assert_kb_owned(kb_id, company.id, db)
+    if kb.kb_type != "dynamic" or not kb.source_url:
+        raise HTTPException(status_code=400, detail="Not a dynamic knowledge base")
+    count = await sync_dynamic_kb(kb.id, kb.source_url, db)
+    return {"message": f"Synced {count} entries from Google Sheets", "entries": count}

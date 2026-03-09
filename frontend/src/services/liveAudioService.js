@@ -761,9 +761,9 @@
 const GEMINI_LIVE_MODEL = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
 const MIC_SAMPLE_RATE   = 16000;
 const OUT_SAMPLE_RATE   = 24000;
-const LOCK_RATIO        = 0.25;
-const CALIB_CHUNKS      = 8;
-const INTERRUPT_THRESH  = 3.5;
+const LOCK_RATIO        = 0.15;   // floor = 15% of median speech energy (tight gate)
+const CALIB_CHUNKS      = 15;     // collect 15 chunks (~3.8s) for a stable baseline
+const INTERRUPT_THRESH  = 6.0;    // must be 6x floor to count as real speech interruption
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -917,6 +917,7 @@ export class LiveAudioService {
     _connect(url) {
         return new Promise((resolve, reject) => {
             const ws = new WebSocket(url);
+            ws.binaryType = 'arraybuffer';   // must be set before any frames arrive
             this._ws = ws;
 
             const timer = setTimeout(() => {
@@ -931,7 +932,8 @@ export class LiveAudioService {
 
             ws.onmessage = async (evt) => {
                 const text = typeof evt.data === 'string'
-                    ? evt.data : new TextDecoder().decode(evt.data);
+                    ? evt.data
+                    : new TextDecoder().decode(new Uint8Array(evt.data));
                 let msg;
                 try { msg = JSON.parse(text); } catch { return; }
 
@@ -987,10 +989,24 @@ export class LiveAudioService {
 
     _sendSetup() {
         const { name, role, system_prompt, voice_id } = this._cfg || {};
-        const sys = `You are ${name||'AI'}, a ${role||'assistant'}. ` +
-            `Respond in Tanglish (Tamil+English mix). Use Tamil script for Tamil words. ` +
-            `Be concise and conversational. No bullet points. ` +
-            (system_prompt ? `\n${system_prompt}` : '');
+        const sys =
+            `You are ${name||'AI'}, a ${role||'assistant'}. ` +
+            `ALWAYS respond in Tanglish — a natural spoken mix of Tamil and English, ` +
+            `the way people actually talk in Tamil Nadu. ` +
+            `Write Tamil words in Tamil script, English words in English. ` +
+            `NEVER write pure Tamil or pure English — always mix both naturally. ` +
+            `Examples of Tanglish style:
+` +
+            `  ✔ "Seri saar, ungaloda order ID enna?"
+` +
+            `  ✔ "Ok, naan check pannuren, oru minute wait pannunga."
+` +
+            `  ✔ "Sorry saar, system-la details match aagala."
+` +
+            `  ✔ "Delivery Tuesday-la vanthidum, tension vendam!"
+` +
+            `Keep responses short — 1-2 sentences max. Voice conversation only, no bullet points.` +
+            (system_prompt ? `\n\n${system_prompt}` : '');
 
         this._send({
             setup: {
@@ -999,9 +1015,14 @@ export class LiveAudioService {
                     responseModalities: ['AUDIO'],
                     speechConfig: {
                         voiceConfig: { prebuiltVoiceConfig: { voiceName: voice_id || 'Puck' } }
-                    }
+                    },
+                    // Suppress internal chain-of-thought thinking tokens from being sent
+                    thinkingConfig: { includeThoughts: false },
                 },
                 systemInstruction: { parts: [{ text: sys }] },
+                // Enable transcription of both sides so chat shows spoken words
+                inputAudioTranscription: {},
+                outputAudioTranscription: {},
             }
         });
 
@@ -1038,13 +1059,20 @@ export class LiveAudioService {
                 this._playing = true;
                 this._player.play(fromB64(d.data));
             }
-            if (p.text) this._emit('onTranscription', p.text, false);
+            // Do NOT emit p.text — those are internal thinking tokens (**Crafting...**).
+            // Real spoken transcripts come via inputTranscription/outputTranscription below.
         }
 
-        if (sc.turnComplete || sc.turn_complete) this._playing = false;
+        if (sc.turnComplete || sc.turn_complete) {
+            this._playing = false;
+            this._emit('onTurnComplete');
+        }
 
+        // Transcript of what the user said (enabled by inputAudioTranscription:{} in setup)
         const itx = sc.inputTranscription || sc.input_transcription;
         if (itx?.text) this._emit('onTranscription', itx.text, true);
+
+        // Transcript of what the agent said (enabled by outputAudioTranscription:{} in setup)
         const otx = sc.outputTranscription || sc.output_transcription;
         if (otx?.text) this._emit('onTranscription', otx.text, false);
     }
@@ -1071,12 +1099,17 @@ export class LiveAudioService {
         const e = rmsEnergy(f32);
 
         if (!this._calibrated) {
-            if (e > 0.005) this._calibBuf.push(e);
+            // Collect ALL chunks (including silence) to find the ambient noise floor.
+            // Using low-energy chunks gives a stable background level to gate against.
+            this._calibBuf.push(e);
             if (this._calibBuf.length >= CALIB_CHUNKS) {
-                const s = [...this._calibBuf].sort((a,b) => a-b);
-                this._floor = s[Math.floor(s.length/2)] * LOCK_RATIO;
+                const s = [...this._calibBuf].sort((a, b) => a - b);
+                // Use the 20th-percentile energy as the ambient noise floor
+                const ambientFloor = s[Math.floor(s.length * 0.2)];
+                // Gate threshold = ambient floor * ratio, but at least 0.008 to ignore mic hiss
+                this._floor = Math.max(ambientFloor * LOCK_RATIO, 0.008);
                 this._calibrated = true;
-                console.log(`[VL] floor=${this._floor.toFixed(4)}`);
+                console.log(`[VL] calibrated — ambient=${ambientFloor.toFixed(4)}, floor=${this._floor.toFixed(4)}`);
             }
             return f32;
         }
@@ -1084,10 +1117,11 @@ export class LiveAudioService {
         if (this._playing && e > this._floor * INTERRUPT_THRESH) {
             this._playing = false;
             this._player.stop();
-            this._send({ clientContent: { turnComplete: true } });
+            // Don't send anything — Gemini Live handles interruption server-side via VAD.
             this._emit('onInterrupted');
         }
 
+        // Gate out anything below the floor (background noise, other voices at distance)
         return e < this._floor ? new Float32Array(f32.length) : f32;
     }
 
@@ -1112,6 +1146,10 @@ export class LiveAudioService {
         this._worklet = new AudioWorkletNode(this._micCtx, 'cap');
 
         this._worklet.port.onmessage = (ev) => {
+            // Wake the AudioContext every chunk — browsers auto-suspend it causing
+            // audio to stop flowing and then dump 10-20s of buffered audio at once.
+            if (this._micCtx?.state === 'suspended') this._micCtx.resume();
+
             if (!this._live || this._muted || this._ws?.readyState !== WebSocket.OPEN) return;
             const proc = this._processAudio(ev.data);
             const i16  = f32ToI16(proc);
@@ -1122,11 +1160,24 @@ export class LiveAudioService {
             });
         };
 
+        // Keepalive: send a silent chunk every 8s so the WS never idles out
+        this._keepalive = setInterval(() => {
+            if (!this._live || this._ws?.readyState !== WebSocket.OPEN) return;
+            if (this._micCtx?.state === 'suspended') this._micCtx.resume();
+            const silence = new Uint8Array(256); // ~8ms of silence @ 16kHz PCM16
+            this._send({
+                realtimeInput: {
+                    mediaChunks: [{ mimeType:`audio/pcm;rate=${MIC_SAMPLE_RATE}`, data:toB64(silence) }]
+                }
+            });
+        }, 8000);
+
         src.connect(this._worklet);
         console.log('[LA] mic started');
     }
 
     _stopMic() {
+        if (this._keepalive) { clearInterval(this._keepalive); this._keepalive = null; }
         if (this._worklet) { try { this._worklet.disconnect(); } catch(_){} this._worklet = null; }
         if (this._stream)  { this._stream.getTracks().forEach(t=>t.stop()); this._stream = null; }
     }

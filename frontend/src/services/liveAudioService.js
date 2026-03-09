@@ -902,7 +902,7 @@ export class LiveAudioService {
             const { key } = await r.json();
 
             // 3. Connect WS — BLOCKING wait for setupComplete before continuing
-            const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${key}`;
+            const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${key}`;
             await this._connect(url);
 
             return true;
@@ -917,6 +917,7 @@ export class LiveAudioService {
     _connect(url) {
         return new Promise((resolve, reject) => {
             const ws = new WebSocket(url);
+            ws.binaryType = 'arraybuffer';
             this._ws = ws;
 
             const timer = setTimeout(() => {
@@ -1041,7 +1042,10 @@ export class LiveAudioService {
             if (p.text) this._emit('onTranscription', p.text, false);
         }
 
-        if (sc.turnComplete || sc.turn_complete) this._playing = false;
+        if (sc.turnComplete || sc.turn_complete) {
+            this._playing = false;
+            this._emit('onTurnComplete');
+        }
 
         const itx = sc.inputTranscription || sc.input_transcription;
         if (itx?.text) this._emit('onTranscription', itx.text, true);

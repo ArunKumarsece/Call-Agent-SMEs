@@ -877,6 +877,13 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                     liveServiceRef.current = null;
                 },
 
+                onTurnComplete: () => {
+                    agentTranscriptRef.current = '';
+                    userTranscriptRef.current = '';
+                    setPhase('listening');
+                    setStatus('🎤 Your turn — speak naturally...');
+                },
+
                 onInterrupted: () => {
                     // Agent stopped mid-sentence — clear partial transcript
                     agentTranscriptRef.current = '';

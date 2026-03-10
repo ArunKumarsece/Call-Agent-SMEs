@@ -6,3 +6,29 @@ __pycache__/
 dist/
 uploads/
 agents.db
+# Environment
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# Database / Vector DB
+backend/chroma_db/
+backend/chroma_db_fresh_*/
+backend/chroma_db_incompatible_*/
+
+# Backups
+*.bak
+*.bak2
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

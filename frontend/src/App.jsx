@@ -69,7 +69,7 @@ function TokenWirer() {
 function PrivateRoute({ children }) {
     const { company, loading } = useAuth();
     if (loading) return (
-        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="route-loading-screen">
             <div className="spinner" />
         </div>
     );
@@ -89,7 +89,7 @@ function Navbar() {
     return (
         <nav className="navbar">
             <Link to="/" className="navbar-brand">
-                <span className="brand-icon">🤖</span>
+                <span className="brand-icon"></span>
                 VoiceForge AI
             </Link>
 
@@ -104,21 +104,21 @@ function Navbar() {
             </div>
 
             {/* Company pill */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 20, padding: '5px 14px 5px 8px' }}>
-                    <div style={{ width: 26, height: 26, borderRadius: 8, background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>
-                        {company.logo_url ? <img src={company.logo_url} style={{ width: 24, height: 24, borderRadius: 6, objectFit: 'cover' }} alt="" /> : '🏢'}
+            <div className="navbar-actions">
+                <div className="company-pill">
+                    <div className="company-pill-avatar">
+                        {company.logo_url ? <img src={company.logo_url} className="company-pill-logo" alt="" /> : <span style={{ fontWeight: 800, fontSize: 11 }}>{(company.company_name || 'C')[0].toUpperCase()}</span>}
                     </div>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span className="company-pill-name">
                         {company.company_name}
                     </span>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: PLAN_BADGE[company.plan] || '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    <span className="company-pill-plan" style={{ color: PLAN_BADGE[company.plan] || '#94a3b8' }}>
                         {company.plan}
                     </span>
                 </div>
                 <button
                     onClick={logout}
-                    style={{ background: 'none', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', borderRadius: 8, padding: '5px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600, transition: 'all 0.2s' }}
+                    className="btn btn-ghost btn-sm"
                     title="Sign out"
                 >
                     Sign out

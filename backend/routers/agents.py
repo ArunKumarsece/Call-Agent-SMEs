@@ -422,7 +422,7 @@ async def chat_with_agent(
     company: Company = Depends(get_current_company),
 ):
     from services.multi_agent import orchestrator
-    from services.enhanced_rag import search_knowledge_base_enhanced, assemble_context
+    from services.enhanced_rag import search_knowledge_base_unified, assemble_context
 
     agent = _get_or_404(agent_id, company.id, db)
     message = body.get("message", "").strip()
@@ -432,10 +432,12 @@ async def chat_with_agent(
     conversation_history = body.get("history", [])
 
     try:
-        results = await search_knowledge_base_enhanced(message, agent_id, db, top_k=6)
+        results = await search_knowledge_base_unified(message, agent_id, db)
         context = assemble_context(results)
+        if not context.strip():
+            context = "[NO RELEVANT KNOWLEDGE BASE ENTRIES FOUND]"
     except Exception as e:
-        print(f"RAG error: {e}"); results, context = [], ""
+        print(f"RAG error: {e}"); results, context = [], "[NO RELEVANT KNOWLEDGE BASE ENTRIES FOUND]"
 
     try:
         decision = await orchestrator.run(
@@ -456,6 +458,34 @@ async def chat_with_agent(
         "sources": [{"content": r["content"][:120], "score": r["score"], "source": r.get("source", "")} for r in results],
         "metadata": decision.metadata,
     }
+
+
+@router.get("/{agent_id}/kb-context")
+async def get_agent_kb_context(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    company: Company = Depends(get_current_company),
+):
+    """Return all KB entries for an agent as a single context string for Live Audio."""
+    agent = _get_or_404(agent_id, company.id, db)
+    from services.rag_config import MAX_CONTEXT_CHARS
+    kb_ids = db.query(KnowledgeBase.id).filter(KnowledgeBase.agent_id == agent_id).all()
+    kb_ids = [k[0] for k in kb_ids]
+    if not kb_ids:
+        return {"context": ""}
+    entries = db.query(KBEntry.content).filter(KBEntry.kb_id.in_(kb_ids)).all()
+    chunks = []
+    total = 0
+    for (content,) in entries:
+        c = content.strip()
+        if total + len(c) > MAX_CONTEXT_CHARS:
+            remaining = MAX_CONTEXT_CHARS - total
+            if remaining > 100:
+                chunks.append(c[:remaining])
+            break
+        chunks.append(c)
+        total += len(c)
+    return {"context": "\n\n".join(chunks)}
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

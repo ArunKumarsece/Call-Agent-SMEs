@@ -172,6 +172,14 @@ from routers import agents, knowledge_base, voice_call
 from routers.auth import router as auth_router
 from services.gemini_service import AVAILABLE_VOICES
 import os
+import logging
+
+# ─── Logging ──────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="AI Voice Agent Platform",
@@ -207,8 +215,20 @@ app.include_router(voice_call.router)
 @app.on_event("startup")
 async def startup_event():
     init_db()
-    print("✅ Database initialized")
-    print("🚀 AI Voice Agent Platform v2 running!")
+    logger.info("✅ Database initialized")
+
+    # Initialize ChromaDB client (if RAG_BACKEND=chroma)
+    from services.rag_config import RAG_BACKEND, print_config
+    print_config()
+    if RAG_BACKEND == "chroma":
+        try:
+            from services.vector_store import get_chroma_client
+            get_chroma_client()
+        except Exception as e:
+            logger.error(f"❌ ChromaDB init failed: {e}")
+            raise
+
+    logger.info("🚀 AI Voice Agent Platform v2 running!")
 
 
 # ─── Public endpoints ─────────────────────────────────────

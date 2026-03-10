@@ -59,23 +59,18 @@ export default function Settings() {
     const PLAN_COLORS = { free: '#94a3b8', pro: '#6c63ff', enterprise: '#f59e0b' };
 
     return (
-        <div style={{ maxWidth: 680, margin: '0 auto', padding: '2rem 1rem' }}>
+        <div style={{ maxWidth: 680, margin: '0 auto', padding: '2rem 1rem', animation: 'pageEnter 0.5s ease-out' }}>
             {toast && (
-                <div style={{
-                    position: 'fixed', top: 24, right: 24, zIndex: 9999,
-                    background: toast.type === 'error' ? '#ef4444' : '#22c55e',
-                    color: 'white', borderRadius: 10, padding: '12px 20px',
-                    fontSize: 14, fontWeight: 600, boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
-                }}>
+                <div className={`toast toast-${toast.type}`}>
                     {toast.msg}
                 </div>
             )}
 
             <div style={{ marginBottom: 32 }}>
-                <h1 style={{ fontSize: 26, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
-                    ⚙️ Settings
+                <h1 className="page-title" style={{ fontSize: 26, marginBottom: 4 }}>
+                    Settings
                 </h1>
-                <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>
+                <p className="page-subtitle">
                     Manage your company account and security
                 </p>
             </div>
@@ -83,7 +78,7 @@ export default function Settings() {
             {/* Company info card */}
             <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 16, padding: '20px 24px', marginBottom: 24, display: 'flex', alignItems: 'center', gap: 16 }}>
                 <div style={{ width: 52, height: 52, borderRadius: 14, background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>
-                    {company?.logo_url ? <img src={company.logo_url} style={{ width: 40, height: 40, borderRadius: 10, objectFit: 'cover' }} alt="" /> : '🏢'}
+                    {company?.logo_url ? <img src={company.logo_url} style={{ width: 40, height: 40, borderRadius: 10, objectFit: 'cover' }} alt="" /> : <span style={{ color: 'white', fontWeight: 800, fontSize: 16 }}>{(company?.company_name || 'C')[0].toUpperCase()}</span>}
                 </div>
                 <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>{company?.company_name}</div>
@@ -96,7 +91,7 @@ export default function Settings() {
 
             {/* Tab bar */}
             <div style={{ display: 'flex', gap: 4, marginBottom: 24, background: 'var(--bg-secondary)', borderRadius: 10, padding: 4 }}>
-                {[['profile', '🏢 Profile'], ['security', '🔒 Security'], ['danger', '⚠️ Danger Zone']].map(([id, label]) => (
+                {[['profile', 'Profile'], ['security', 'Security'], ['danger', 'Danger Zone']].map(([id, label]) => (
                     <button key={id} onClick={() => setTab(id)} style={{
                         flex: 1, padding: '8px 12px', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600,
                         background: tab === id ? 'var(--bg-card)' : 'transparent',

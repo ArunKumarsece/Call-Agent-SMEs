@@ -745,7 +745,7 @@ function AgentDecisionPanel({ decision, onClose }) {
     return (
         <div style={{ background: 'rgba(108,99,255,0.07)', border: '1px solid rgba(108,99,255,0.2)', borderRadius: 10, padding: '10px 14px', marginBottom: 8, fontSize: 11, position: 'relative' }}>
             <button onClick={onClose} style={{ position: 'absolute', top: 6, right: 8, background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: 13 }}>✕</button>
-            <div style={{ fontWeight: 700, color: '#6c63ff', marginBottom: 6, fontSize: 12 }}>🤖 Multi-Agent Decision</div>
+            <div style={{ fontWeight: 700, color: '#6c63ff', marginBottom: 6, fontSize: 12 }}>Multi-Agent Decision</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
                 {[
                     ['Intent', decision.intent, '#6c63ff'],
@@ -757,8 +757,8 @@ function AgentDecisionPanel({ decision, onClose }) {
                         {label}: {val}
                     </span>
                 ))}
-                {decision.rag_used && <span style={{ background: '#22c55e18', color: '#22c55e', borderRadius: 6, padding: '2px 8px', fontWeight: 600 }}>📚 RAG</span>}
-                {decision.should_escalate && <span style={{ background: '#ef444418', color: '#ef4444', borderRadius: 6, padding: '2px 8px', fontWeight: 700 }}>⚠️ Escalate</span>}
+                {decision.rag_used && <span style={{ background: '#22c55e18', color: '#22c55e', borderRadius: 6, padding: '2px 8px', fontWeight: 600 }}>RAG</span>}
+                {decision.should_escalate && <span style={{ background: '#ef444418', color: '#ef4444', borderRadius: 6, padding: '2px 8px', fontWeight: 700 }}>Escalate</span>}
             </div>
             {decision.agents_invoked?.length > 0 && (
                 <div style={{ marginTop: 5, color: '#64748b', fontSize: 10 }}>{decision.agents_invoked.join(' → ')}</div>
@@ -785,14 +785,20 @@ function WaveBar({ active }) {
     );
 }
 
-// ─── Main Widget ──────────────────────────────────────────────────────────────
+// SVG icon components for call phases
+const PhoneIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>;
+const ClockIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>;
+const SpeakerIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>;
+const MicIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>;
+
+// ── Main Widget ──────────────────────────────────────────────────────────────
 export default function VoiceCallWidget({ agentId, agentName, agent }) {
     const [phase, setPhase] = useState('idle'); // idle | ringing | connected | agent_speaking | listening
     const [connected, setConnected] = useState(false);
     const [connecting, setConnecting] = useState(false);
     const [muted, setMuted] = useState(false);
     const [messages, setMessages] = useState([]);
-    const [status, setStatus] = useState('Click 📞 to start a live voice call');
+    const [status, setStatus] = useState('Click the call button to start a live voice call');
     const [textInput, setTextInput] = useState('');
     const [lastDecision, setLastDecision] = useState(null);
     const [showDecision, setShowDecision] = useState(false);
@@ -829,7 +835,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
         // Ring first
         setPhase('ringing');
         ringTone.start();
-        setStatus('📳 Ringing...');
+        setStatus('Ringing...');
 
         ringingTimerRef.current = setTimeout(async () => {
             ringTone.stop();
@@ -840,15 +846,15 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
             const service = new LiveAudioService();
             liveServiceRef.current = service;
 
-            const agentConfig = agent || { name: agentName, role: 'Customer Support', system_prompt: '', voice_id: 'Puck' };
+            const agentConfig = { id: agentId, ...(agent || { name: agentName, role: 'Customer Support', system_prompt: '', voice_id: 'Puck' }) };
 
             const success = await service.connect(agentConfig, {
                 onOpen: () => {
                     setConnected(true);
                     setConnecting(false);
                     setPhase('agent_speaking');
-                    setStatus(`🔊 ${agentName} is greeting you...`);
-                    addMessage('system', `📞 Connected to ${agentName}. Agent is speaking first...`);
+                    setStatus(`${agentName} is greeting you...`);
+                    addMessage('system', `Connected to ${agentName}. Agent is speaking first...`);
                     userTranscriptRef.current = '';
                     agentTranscriptRef.current = '';
                 },
@@ -861,8 +867,8 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                     setConnecting(false);
                     setMuted(false);
                     setPhase('idle');
-                    setStatus('Call ended. Click 📞 to call again.');
-                    addMessage('system', '📞 Call ended');
+                    setStatus('Call ended. Click call button to call again.');
+                    addMessage('system', 'Call ended');
                     liveServiceRef.current = null;
                 },
 
@@ -872,8 +878,8 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                     setConnecting(false);
                     setPhase('idle');
                     const msg = e?.message || 'Connection failed';
-                    setStatus(`⚠️ ${msg}`);
-                    addMessage('system', `⚠️ ${msg}`);
+                    setStatus(`Error: ${msg}`);
+                    addMessage('system', msg);
                     liveServiceRef.current = null;
                 },
 
@@ -892,7 +898,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                         return prev;
                     });
                     setPhase('listening');
-                    setStatus('🎤 Go ahead — I\'m listening...');
+                    setStatus('Go ahead — I\'m listening...');
                 },
 
                 onTranscription: (text, isUser) => {
@@ -902,14 +908,14 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                         // Accumulate user speech transcript
                         if (userTranscriptRef.current === '') {
                             userTranscriptRef.current = text;
-                            addMessage('user', `🎤 ${text}`);
+                            addMessage('user', text);
                         } else {
                             userTranscriptRef.current += ' ' + text;
-                            updateLastMessage('user', `🎤 ${userTranscriptRef.current}`);
+                            updateLastMessage('user', userTranscriptRef.current);
                         }
                         agentTranscriptRef.current = '';
                         setPhase('listening');
-                        setStatus('🎤 Listening...');
+                        setStatus('Listening...');
                     } else {
                         // Accumulate agent response transcript
                         if (agentTranscriptRef.current === '') {
@@ -921,7 +927,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                         }
                         userTranscriptRef.current = '';
                         setPhase('agent_speaking');
-                        setStatus(`🔊 ${agentName} is speaking...`);
+                        setStatus(`${agentName} is speaking...`);
                     }
                 },
             });
@@ -929,7 +935,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
             if (!success) {
                 setConnecting(false);
                 setPhase('idle');
-                setStatus('❌ Failed to connect. Check your Gemini API key supports Live API.');
+                setStatus('Failed to connect. Check your Gemini API key supports Live API.');
             }
         }, 2000); // 2s ring
     }
@@ -944,14 +950,14 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
         setConnecting(false);
         setMuted(false);
         setPhase('idle');
-        setStatus('Call ended. Click 📞 to call again.');
+        setStatus('Call ended. Click call button to call again.');
     }
 
     function toggleMute() {
         if (!liveServiceRef.current) return;
         const nowMuted = liveServiceRef.current.toggleMute();
         setMuted(nowMuted);
-        setStatus(nowMuted ? '🔇 Microphone muted — agent can still speak' : '🎤 Microphone unmuted — listening');
+        setStatus(nowMuted ? 'Microphone muted — agent can still speak' : 'Microphone unmuted — listening');
     }
 
     async function handleTextSubmit(e) {
@@ -975,9 +981,9 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                     setLastDecision(response);
                     setShowDecision(true);
                 }
-                setStatus('Done. Click 📞 to start a live call.');
+                setStatus('Done. Start a live call for voice.');
             } catch (err) {
-                addMessage('system', `⚠️ ${err.message}`);
+                addMessage('system', err.message);
                 setStatus('Error getting response');
             }
         }
@@ -987,21 +993,21 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
     const isActive = connected || connecting || phase === 'ringing';
 
     const phaseConfig = {
-        idle:          { bg: 'linear-gradient(135deg,#22c55e,#16a34a)', icon: '📞', shadow: '0 4px 20px rgba(34,197,94,0.4)', pulse: false },
-        ringing:       { bg: 'linear-gradient(135deg,#f59e0b,#d97706)', icon: '📳', shadow: '0 4px 20px rgba(245,158,11,0.5)', pulse: true },
-        connecting:    { bg: 'linear-gradient(135deg,#6c63ff,#4f46e5)', icon: '⏳', shadow: '0 4px 20px rgba(108,99,255,0.4)', pulse: false },
-        agent_speaking:{ bg: 'linear-gradient(135deg,#6c63ff,#4f46e5)', icon: '🔊', shadow: '0 4px 20px rgba(108,99,255,0.5)', pulse: true },
-        listening:     { bg: 'linear-gradient(135deg,#ef4444,#dc2626)', icon: '🎤', shadow: '0 4px 20px rgba(239,68,68,0.5)', pulse: true },
+        idle:          { bg: 'linear-gradient(135deg,#22c55e,#16a34a)', icon: <PhoneIcon />, shadow: '0 4px 20px rgba(34,197,94,0.4)', pulse: false },
+        ringing:       { bg: 'linear-gradient(135deg,#f59e0b,#d97706)', icon: <PhoneIcon />, shadow: '0 4px 20px rgba(245,158,11,0.5)', pulse: true },
+        connecting:    { bg: 'linear-gradient(135deg,#6c63ff,#4f46e5)', icon: <ClockIcon />, shadow: '0 4px 20px rgba(108,99,255,0.4)', pulse: false },
+        agent_speaking:{ bg: 'linear-gradient(135deg,#6c63ff,#4f46e5)', icon: <SpeakerIcon />, shadow: '0 4px 20px rgba(108,99,255,0.5)', pulse: true },
+        listening:     { bg: 'linear-gradient(135deg,#ef4444,#dc2626)', icon: <MicIcon />, shadow: '0 4px 20px rgba(239,68,68,0.5)', pulse: true },
     };
     const pc = phaseConfig[phase] || phaseConfig.idle;
 
     const statusLabel = {
-        idle:          '⚪ Ready',
-        ringing:       '📳 Ringing...',
-        connecting:    '🟡 Connecting...',
-        agent_speaking:`🔊 ${agentName} speaking`,
-        listening:     '🎤 Live — Listening',
-    }[phase] || '⚪ Ready';
+        idle:          'Ready',
+        ringing:       'Ringing...',
+        connecting:    'Connecting...',
+        agent_speaking:`${agentName} speaking`,
+        listening:     'Live — Listening',
+    }[phase] || 'Ready';
 
     return (
         <>
@@ -1020,14 +1026,22 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                 .call-main-btn.pulsing { animation: ring-pulse 0.9s ease-in-out infinite; }
             `}</style>
 
-            <div className="voice-widget" style={{ maxWidth: 620 }}>
+            <div className="voice-widget" style={{ maxWidth: 620, animation: 'pageEnter 0.4s ease-out' }}>
                 {/* ── Header ── */}
-                <div className="voice-widget-header">
+                <div className="voice-widget-header" style={{ borderBottom: '1px solid var(--border-color)' }}>
                     <div>
-                        <h3 style={{ fontSize: 'var(--font-base)', fontWeight: 700 }}>
-                            🧪 Test Call — {agentName}
+                        <h3 style={{ fontSize: '0.95rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{
+                                width: 32, height: 32, borderRadius: 10,
+                                background: 'linear-gradient(135deg, rgba(108,92,231,0.15), rgba(0,206,201,0.15))',
+                                border: '1px solid rgba(108,92,231,0.2)',
+                                display: 'inline-grid', placeItems: 'center',
+                            }}>                            
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
+                            </span>
+                            Test Call — {agentName}
                         </h3>
-                        <span className={`badge ${connected ? 'badge-success' : phase === 'ringing' || phase === 'connecting' ? 'badge-warning' : 'badge-warning'}`} style={{ marginTop: 4 }}>
+                        <span className={`badge ${connected ? 'badge-success' : phase === 'ringing' || phase === 'connecting' ? 'badge-warning' : 'badge-warning'}`} style={{ marginTop: 6 }}>
                             {statusLabel}
                         </span>
                     </div>
@@ -1039,11 +1053,11 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                                     className={`btn btn-sm ${muted ? 'btn-warning' : 'btn-secondary'}`}
                                     onClick={toggleMute}
                                 >
-                                    {muted ? '🔇 Unmute' : '🎤 Mute'}
+                                    {muted ? 'Unmute' : 'Mute'}
                                 </button>
                             )}
                             <button className="btn btn-danger btn-sm" onClick={endCall}>
-                                📞 End Call
+                                End Call
                             </button>
                         </div>
                     )}
@@ -1110,13 +1124,13 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                         {phase === 'listening' && <WaveBar active={!muted} />}
 
                         {phase === 'agent_speaking' && (
-                            <div style={{ fontSize: 11, color: '#6c63ff', fontWeight: 600, letterSpacing: 0.5 }}>
-                                AGENT SPEAKING — just talk to interrupt
+                            <div style={{ fontSize: 11, color: 'var(--primary)', fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                                Agent speaking — just talk to interrupt
                             </div>
                         )}
                         {phase === 'listening' && (
-                            <div style={{ fontSize: 11, color: '#ef4444', fontWeight: 600, letterSpacing: 0.5 }}>
-                                ● LIVE LISTENING — speak naturally
+                            <div style={{ fontSize: 11, color: '#ef4444', fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                                ● Live listening — speak naturally
                             </div>
                         )}
                     </div>

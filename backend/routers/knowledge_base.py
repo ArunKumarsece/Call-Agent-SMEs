@@ -577,7 +577,9 @@ async def upload_file(
         raise HTTPException(status_code=400, detail="Could not extract content from file")
 
     all_text = "\n\n".join([c["content"] for c in chunks])
-    stored = await embed_and_store_chunked(text=all_text, kb_id=kb_id, source=file.filename, db=db)
+    stored = await embed_and_store_chunked(
+        text=all_text, kb_id=kb_id, source=file.filename, db=db, agent_id=kb.agent_id,
+    )
     return {"message": f"Processed {len(stored)} smart chunks from {file.filename}", "entries_created": len(stored)}
 
 
@@ -587,11 +589,23 @@ async def add_manual_entry(
     db: Session = Depends(get_db),
     company: Company = Depends(get_current_company),
 ):
-    _assert_kb_owned(kb_id, company.id, db)
+    kb = _assert_kb_owned(kb_id, company.id, db)
     db_entry = await embed_and_store(
         content=entry.content, kb_id=kb_id,
         source=entry.source_file or "manual", chunk_index=0, db=db
     )
+    # Mirror to ChromaDB when active
+    from services.rag_config import RAG_BACKEND
+    if RAG_BACKEND == "chroma" and db_entry.id:
+        try:
+            from services.vector_store import upsert_entry
+            await upsert_entry(
+                entry_id=db_entry.id, content=entry.content,
+                agent_id=kb.agent_id, kb_id=kb_id,
+                source=entry.source_file or "manual", chunk_index=0,
+            )
+        except Exception as e:
+            print(f"ChromaDB manual entry upsert warning: {e}")
     return KBEntryResponse(
         id=db_entry.id, kb_id=db_entry.kb_id, content=db_entry.content,
         source_file=db_entry.source_file, chunk_index=db_entry.chunk_index,
@@ -638,3 +652,101 @@ async def sync_sheets(
         raise HTTPException(status_code=400, detail="Not a dynamic knowledge base")
     count = await sync_dynamic_kb(kb.id, kb.source_url, db)
     return {"message": f"Synced {count} entries from Google Sheets", "entries": count}
+
+
+@router.post("/agent/{agent_id}/reindex")
+async def reindex_agent_kb(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    company: Company = Depends(get_current_company),
+):
+    """
+    Re-index all KB entries for an agent into ChromaDB.
+    Only effective when RAG_BACKEND=chroma.
+    Fetches all entries from SQL, then bulk-upserts to vector store.
+    """
+    from services.rag_config import RAG_BACKEND
+    _assert_agent_owned(agent_id, company.id, db)
+
+    if RAG_BACKEND != "chroma":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Reindex only supported for RAG_BACKEND=chroma (current: {RAG_BACKEND})",
+        )
+
+    # Fetch all KB entries for this agent
+    kb_ids = db.query(KnowledgeBase.id).filter(KnowledgeBase.agent_id == agent_id).all()
+    kb_ids = [k[0] for k in kb_ids]
+
+    if not kb_ids:
+        return {"message": "No knowledge bases found for this agent", "indexed": 0}
+
+    entries = db.query(KBEntry).filter(KBEntry.kb_id.in_(kb_ids)).all()
+    if not entries:
+        return {"message": "No entries to index", "indexed": 0}
+
+    # Build list for reindex
+    entry_dicts = [
+        {
+            "id": e.id,
+            "content": e.content,
+            "kb_id": e.kb_id,
+            "source": e.source_file or "",
+            "chunk_index": e.chunk_index,
+            "embedding": e.embedding,
+        }
+        for e in entries
+    ]
+
+    from services.vector_store import reindex_agent
+    count = await reindex_agent(agent_id, entry_dicts)
+    return {
+        "message": f"Re-indexed {count} entries into ChromaDB for agent {agent_id}",
+        "indexed": count,
+    }
+
+
+@router.get("/agent/{agent_id}/debug")
+async def debug_agent_kb(
+    agent_id: str,
+    query: str = "test",
+    db: Session = Depends(get_db),
+    company: Company = Depends(get_current_company),
+):
+    """
+    DEBUG endpoint — check KB entries and RAG search results.
+    Useful for diagnosing hallucination issues.
+    """
+    _assert_agent_owned(agent_id, company.id, db)
+
+    # Get KB stats from SQL
+    kb_ids = db.query(KnowledgeBase.id).filter(KnowledgeBase.agent_id == agent_id).all()
+    kb_ids = [k[0] for k in kb_ids]
+    entry_count = 0
+    if kb_ids:
+        entry_count = db.query(KBEntry).filter(KBEntry.kb_id.in_(kb_ids)).count()
+
+    # Get ChromaDB stats
+    from services.vector_store import get_collection_stats
+    chroma_stats = get_collection_stats(agent_id)
+
+    # Test search
+    from services.enhanced_rag import search_knowledge_base_unified
+    search_results = await search_knowledge_base_unified(query, agent_id, db, top_k=3)
+
+    return {
+        "agent_id": agent_id,
+        "sql_stats": {
+            "kb_count": len(kb_ids),
+            "entry_count": entry_count,
+        },
+        "chroma_stats": chroma_stats,
+        "test_search": {
+            "query": query,
+            "results_count": len(search_results),
+            "results": [
+                {"content": r["content"][:100], "score": r["score"], "source": r["source"]}
+                for r in search_results
+            ]
+        }
+    }

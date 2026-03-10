@@ -110,8 +110,14 @@ export default function CreateAgent() {
         }
     }
 
+    const steps = [
+        { num: 1, label: 'Agent Details' },
+        { num: 2, label: 'Knowledge Base' },
+        { num: 3, label: 'Review & Create' },
+    ];
+
     return (
-        <div>
+        <div style={{ animation: 'pageEnter 0.5s ease-out' }}>
             {toast && (
                 <div className={`toast toast-${toast.type}`}>{toast.message}</div>
             )}
@@ -123,24 +129,47 @@ export default function CreateAgent() {
                 </div>
             </div>
 
-            {/* Step indicators */}
+            {/* Step progress */}
             <div style={{
-                display: 'flex', gap: 'var(--space-md)', marginBottom: 'var(--space-2xl)',
-                justifyContent: 'center'
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                gap: 0, marginBottom: 'var(--space-2xl)', padding: '0 var(--space-lg)',
             }}>
-                {[
-                    { num: 1, label: 'Agent Details' },
-                    { num: 2, label: 'Knowledge Base' },
-                    { num: 3, label: 'Review & Create' },
-                ].map(s => (
-                    <button
-                        key={s.num}
-                        className={`btn ${step >= s.num ? 'btn-primary' : 'btn-secondary'} btn-sm`}
-                        onClick={() => { if (s.num < step) setStep(s.num); }}
-                        style={{ cursor: s.num <= step ? 'pointer' : 'default', minWidth: 160 }}
-                    >
-                        {step > s.num ? '✅' : `${s.num}.`} {s.label}
-                    </button>
+                {steps.map((s, i) => (
+                    <div key={s.num} style={{ display: 'flex', alignItems: 'center' }}>
+                        <button
+                            type="button"
+                            onClick={() => { if (s.num < step) setStep(s.num); }}
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: 8, padding: '10px 18px',
+                                borderRadius: 999, border: 'none', cursor: s.num <= step ? 'pointer' : 'default',
+                                background: step === s.num
+                                    ? 'linear-gradient(135deg, var(--primary), var(--accent))'
+                                    : step > s.num ? 'rgba(0,184,148,0.15)' : 'var(--bg-input)',
+                                color: step >= s.num ? '#fff' : 'var(--text-muted)',
+                                fontWeight: 700, fontSize: '0.78rem', transition: 'all 0.3s ease',
+                                boxShadow: step === s.num ? '0 4px 16px rgba(108,92,231,0.35)' : 'none',
+                            }}
+                        >
+                            <span style={{
+                                width: 22, height: 22, borderRadius: '50%',
+                                background: step > s.num ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)',
+                                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                fontSize: 12, fontWeight: 800,
+                            }}>
+                                {step > s.num ? (
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6L9 17l-5-5" /></svg>
+                                ) : s.num}
+                            </span>
+                            {s.label}
+                        </button>
+                        {i < steps.length - 1 && (
+                            <div style={{
+                                width: 40, height: 2, margin: '0 4px',
+                                background: step > s.num ? 'var(--accent)' : 'var(--border-color)',
+                                borderRadius: 2, transition: 'background 0.3s ease',
+                            }} />
+                        )}
+                    </div>
                 ))}
             </div>
 
@@ -263,14 +292,14 @@ export default function CreateAgent() {
                                         className={`btn ${kbType === 'static' ? 'btn-primary' : 'btn-secondary'}`}
                                         onClick={() => setKbType('static')}
                                     >
-                                        📄 Static (Files & Manual)
+                                        Static (Files & Manual)
                                     </button>
                                     <button
                                         type="button"
                                         className={`btn ${kbType === 'dynamic' ? 'btn-primary' : 'btn-secondary'}`}
                                         onClick={() => setKbType('dynamic')}
                                     >
-                                        📊 Dynamic (Google Sheets)
+                                        Dynamic (Google Sheets)
                                     </button>
                                 </div>
                             </div>
@@ -297,7 +326,9 @@ export default function CreateAgent() {
                                                 setUploadFiles([...uploadFiles, ...Array.from(e.dataTransfer.files)]);
                                             }}
                                         >
-                                            <div style={{ fontSize: 32, marginBottom: 'var(--space-sm)' }}>📁</div>
+                                            <div style={{ fontSize: 32, marginBottom: 'var(--space-sm)', color: 'var(--text-muted)' }}>
+                                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+                                            </div>
                                             <p>Click or drag files here</p>
                                             <p className="form-helper">Supports CSV, PDF, Excel (.xlsx)</p>
                                         </div>
@@ -321,12 +352,14 @@ export default function CreateAgent() {
                                                         marginBottom: 'var(--space-xs)',
                                                         fontSize: 'var(--font-sm)',
                                                     }}>
-                                                        <span>📎 {f.name} ({(f.size / 1024).toFixed(1)} KB)</span>
+                                                        <span>{f.name} ({(f.size / 1024).toFixed(1)} KB)</span>
                                                         <button
                                                             type="button"
                                                             className="btn btn-ghost btn-sm"
                                                             onClick={() => setUploadFiles(uploadFiles.filter((_, idx) => idx !== i))}
-                                                        >❌</button>
+                                                        >
+                                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                                                        </button>
                                                     </div>
                                                 ))}
                                             </div>
@@ -353,7 +386,9 @@ export default function CreateAgent() {
                                                         type="button"
                                                         className="btn btn-ghost btn-sm"
                                                         onClick={() => setManualEntries(manualEntries.filter((_, idx) => idx !== i))}
-                                                    >❌</button>
+                                                    >
+                                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                                                    </button>
                                                 )}
                                             </div>
                                         ))}
@@ -400,39 +435,47 @@ export default function CreateAgent() {
                                 Review & Create
                             </h2>
 
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-lg)' }}>
-                                <div>
-                                    <h4 style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-xs)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>Agent Name</h4>
-                                    <p style={{ fontWeight: 600 }}>{form.name || '—'}</p>
+                            <div style={{
+                                display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16,
+                                background: 'var(--bg-input)', borderRadius: 'var(--radius-lg)',
+                                padding: 'var(--space-xl)', border: '1px solid var(--border-color)',
+                            }}>
+                                {[
+                                    { label: 'Agent Name', val: form.name || '—' },
+                                    { label: 'Role', val: form.role, badge: true },
+                                    { label: 'Voice', val: form.voice_id },
+                                    { label: 'Language', val: form.language },
+                                ].map(f => (
+                                    <div key={f.label} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                                        <div style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--primary)', marginTop: 6, flexShrink: 0 }} />
+                                        <div>
+                                            <div style={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 2 }}>{f.label}</div>
+                                            {f.badge ? <span className="badge badge-primary">{f.val}</span> : <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{f.val}</div>}
+                                        </div>
+                                    </div>
+                                ))}
+                                <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                                    <div style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--primary)', marginTop: 6, flexShrink: 0 }} />
+                                    <div>
+                                        <div style={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 2 }}>Description</div>
+                                        <div style={{ color: 'var(--text-primary)' }}>{form.description || '—'}</div>
+                                    </div>
                                 </div>
-                                <div>
-                                    <h4 style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-xs)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>Role</h4>
-                                    <p><span className="badge badge-primary">{form.role}</span></p>
-                                </div>
-                                <div>
-                                    <h4 style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-xs)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>Voice</h4>
-                                    <p>{form.voice_id}</p>
-                                </div>
-                                <div>
-                                    <h4 style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-xs)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>Language</h4>
-                                    <p>{form.language}</p>
-                                </div>
-                                <div style={{ gridColumn: '1 / -1' }}>
-                                    <h4 style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-xs)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>Description</h4>
-                                    <p>{form.description || '—'}</p>
-                                </div>
-                                <div style={{ gridColumn: '1 / -1' }}>
-                                    <h4 style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-xs)', textTransform: 'uppercase', marginBottom: 'var(--space-xs)' }}>Knowledge Base</h4>
-                                    <p>
-                                        <span className="badge badge-warning">{kbType === 'static' ? '📄 Static' : '📊 Dynamic'}</span>
-                                        {' '}{kbName}
-                                        {kbType === 'static' && uploadFiles.length > 0 && (
-                                            <span className="text-muted"> — {uploadFiles.length} file(s)</span>
-                                        )}
-                                        {kbType === 'dynamic' && sheetsUrl && (
-                                            <span className="text-muted"> — Google Sheets linked</span>
-                                        )}
-                                    </p>
+                                <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                                    <div style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--primary)', marginTop: 6, flexShrink: 0 }} />
+                                    <div>
+                                        <div style={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 2 }}>Knowledge Base</div>
+                                        <div>
+                                            <span className="badge badge-warning">{kbType === 'static' ? 'Static' : 'Dynamic'}</span>
+                                            {' '}{kbName}
+                                            {kbType === 'static' && uploadFiles.length > 0 && (
+                                                <span style={{ color: 'var(--text-muted)' }}> — {uploadFiles.length} file(s)</span>
+                                            )}
+                                            {kbType === 'dynamic' && sheetsUrl && (
+                                                <span style={{ color: 'var(--text-muted)' }}> — Google Sheets linked</span>
+                                            )}
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
 
@@ -440,11 +483,12 @@ export default function CreateAgent() {
                                 <button type="button" className="btn btn-secondary" onClick={() => setStep(2)}>
                                     ← Back
                                 </button>
-                                <button type="submit" className="btn btn-primary btn-lg" disabled={loading}>
+                                <button type="submit" className="btn btn-primary btn-lg" disabled={loading}
+                                    style={{ minWidth: 180, fontSize: '1rem' }}>
                                     {loading ? (
                                         <><div className="spinner" style={{ width: 18, height: 18, borderWidth: 2 }}></div> Creating...</>
                                     ) : (
-                                        '🚀 Create Agent'
+                                        'Create Agent'
                                     )}
                                 </button>
                             </div>

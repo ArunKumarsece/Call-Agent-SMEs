@@ -215,11 +215,12 @@ Response language rule: {style_note}
 Detected user intent: {intent}
 Detected user sentiment: {sentiment}{escalation_note}
 
-Rules:
-1. Be conversational and concise — optimised for voice.
-2. Use the knowledge-base context when it directly answers the query.
-3. Do NOT hallucinate facts not present in context.
-4. If you don't know, say so honestly in Tanglish."""
+CRITICAL RULES:
+1. You MUST ONLY answer using the knowledge base context provided below.
+2. If the context does not contain information to answer the user's question, say "Sorry, en kitta antha information illa" (I don't have that information) in Tanglish.
+3. NEVER use your general knowledge or make up information not present in the provided context.
+4. Be conversational and concise — optimised for voice.
+5. If context says "[NO RELEVANT KNOWLEDGE BASE ENTRIES FOUND]", tell the user politely that you don't have information about their question."""
 
     try:
         model = _build_model(system)
@@ -245,8 +246,9 @@ Rules:
 async def fallback_agent(user_message: str, agent_role: str) -> AgentResult:
     """Simple fallback when main pipeline fails."""
     system = f"""You are a helpful {agent_role} AI assistant.
-Respond briefly in Tanglish (Tamil+English mix).
-Be friendly and ask the user to repeat or clarify."""
+You do not have access to the knowledge base right now.
+Tell the user politely in Tanglish that you are unable to find the information they need.
+Ask them to try again or rephrase their question."""
     try:
         model = _build_model(system)
         resp = model.generate_content(user_message)

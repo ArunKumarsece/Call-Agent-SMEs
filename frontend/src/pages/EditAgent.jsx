@@ -83,17 +83,19 @@ export default function EditAgent() {
     }
 
     return (
-        <div>
+        <div style={{ animation: 'pageEnter 0.5s ease-out' }}>
             {toast && (
                 <div className={`toast toast-${toast.type}`}>{toast.message}</div>
             )}
 
             <div className="page-header">
                 <div>
-                    <Link to={`/agents/${id}`} className="btn btn-ghost btn-sm" style={{ marginBottom: 'var(--space-sm)', display: 'inline-flex' }}>
-                        ← Back to Agent
+                    <Link to={`/agents/${id}`} className="btn btn-ghost btn-sm" style={{ marginBottom: 'var(--space-sm)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+                        Back to Agent
                     </Link>
                     <h1 className="page-title">Edit Agent</h1>
+                    <p className="page-subtitle">Update your agent's configuration and behavior</p>
                 </div>
             </div>
 
@@ -150,7 +152,7 @@ export default function EditAgent() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 'var(--space-xl)' }}>
                         <Link to={`/agents/${id}`} className="btn btn-secondary">Cancel</Link>
                         <button type="submit" className="btn btn-primary" disabled={saving}>
-                            {saving ? 'Saving...' : '💾 Save Changes'}
+                            {saving ? 'Saving...' : 'Save Changes'}
                         </button>
                     </div>
                 </div>

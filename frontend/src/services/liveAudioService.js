@@ -891,17 +891,32 @@ export class LiveAudioService {
         this._calibrated = false;
         this._floor = 0;
         this._calibBuf = [];
+        this._kbContext = '';
 
         try {
             // 1. Prime the player AudioContext during user-gesture
             this._player.prime();
 
-            // 2. Get key
+            // 2. Fetch KB context for this agent (so Live Audio has knowledge base data)
+            try {
+                const kbRes = await fetch(`/api/agents/${agentConfig.id || ''}/kb-context`, {
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` }
+                });
+                if (kbRes.ok) {
+                    const kbData = await kbRes.json();
+                    this._kbContext = kbData.context || '';
+                    console.log(`[LA] KB context loaded: ${this._kbContext.length} chars`);
+                }
+            } catch (e) {
+                console.warn('[LA] KB context fetch failed (non-fatal):', e.message);
+            }
+
+            // 3. Get key
             const r = await fetch('/api/gemini-key');
             if (!r.ok) throw new Error('Cannot load Gemini key');
             const { key } = await r.json();
 
-            // 3. Connect WS — BLOCKING wait for setupComplete before continuing
+            // 4. Connect WS — BLOCKING wait for setupComplete before continuing
             const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${key}`;
             await this._connect(url);
 
@@ -989,6 +1004,10 @@ export class LiveAudioService {
 
     _sendSetup() {
         const { name, role, system_prompt, voice_id } = this._cfg || {};
+        const kbContext = this._kbContext || '';
+        const kbBlock = kbContext
+            ? `\n\nKNOWLEDGE BASE (ONLY use this information to answer questions — NEVER make up information not listed here):\n${kbContext}\n\nIf the user asks something not covered above, say "Sorry, en kitta antha information illa" in Tanglish.`
+            : '';
         const sys =
             `You are ${name||'AI'}, a ${role||'assistant'}. ` +
             `ALWAYS respond in Tanglish — a natural spoken mix of Tamil and English, ` +
@@ -997,16 +1016,16 @@ export class LiveAudioService {
             `NEVER write pure Tamil or pure English — always mix both naturally. ` +
             `Examples of Tanglish style:
 ` +
-            `  ✔ "Seri saar, ungaloda order ID enna?"
+            `  "Seri saar, ungaloda order ID enna?"
 ` +
-            `  ✔ "Ok, naan check pannuren, oru minute wait pannunga."
+            `  "Ok, naan check pannuren, oru minute wait pannunga."
 ` +
-            `  ✔ "Sorry saar, system-la details match aagala."
+            `  "Sorry saar, system-la details match aagala."
 ` +
-            `  ✔ "Delivery Tuesday-la vanthidum, tension vendam!"
+            `  "Delivery Tuesday-la vanthidum, tension vendam!"
 ` +
             `Keep responses short — 1-2 sentences max. Voice conversation only, no bullet points.` +
-            (system_prompt ? `\n\n${system_prompt}` : '');
+            (system_prompt ? `\n\n${system_prompt}` : '') + kbBlock;
 
         this._send({
             setup: {

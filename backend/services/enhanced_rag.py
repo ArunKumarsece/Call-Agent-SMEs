@@ -604,7 +604,14 @@ async def embed_and_store_chunked(
     kb_id: str,
     source: str,
     db: Session,
+    agent_id: str | None = None,
 ) -> list[KBEntry]:
+    """
+    Smart-chunk text, embed each chunk, persist to SQLite/PostgreSQL,
+    and — when ChromaDB backend is active — also upsert into vector store.
+    """
+    from services.rag_config import RAG_BACKEND
+
     chunks = smart_chunk(text)
     stored: list[KBEntry] = []
 
@@ -620,7 +627,112 @@ async def embed_and_store_chunked(
             chunk_index=i,
         )
         db.add(entry)
+        db.flush()   # populate entry.id before upsert
         stored.append(entry)
+
+        # Mirror to ChromaDB when active
+        if RAG_BACKEND == "chroma" and agent_id and entry.id:
+            try:
+                from services.vector_store import upsert_entry
+                await upsert_entry(
+                    entry_id=entry.id,
+                    content=chunk,
+                    agent_id=agent_id,
+                    kb_id=kb_id,
+                    source=source,
+                    chunk_index=i,
+                )
+            except Exception as e:
+                print(f"⚠️  ChromaDB upsert warning ({source}[{i}]): {e}")
 
     db.commit()
     return stored
+
+
+# ─── Unified search dispatcher ────────────────────────────────────────────────
+
+async def search_knowledge_base_unified(
+    query: str,
+    agent_id: str,
+    db: Session,
+    top_k: int | None = None,
+) -> list[dict]:
+    """
+    Single entry-point for RAG search.  Selects backend based on RAG_BACKEND:
+      "chroma"   → ChromaDB ANN search  (fast, scalable) + BM25 hybrid + MMR
+      "enhanced" → SQL embeddings + BM25 + MMR  (medium scale)
+      "legacy"   → SQL embeddings + pure cosine sort  (backward compat)
+
+    All paths return the same list[dict] schema:
+      [{content, score, source, chunk_index, ...}, ...]
+    """
+    from services.rag_config import RAG_BACKEND, TOP_K
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    k = top_k or TOP_K
+
+    logger.info(f"🔍 RAG search: backend={RAG_BACKEND}, agent={agent_id}, query='{query[:50]}...', top_k={k}")
+
+    if RAG_BACKEND == "chroma":
+        results = await _search_chroma(query, agent_id, db, k)
+    elif RAG_BACKEND == "enhanced":
+        results = await search_knowledge_base_enhanced(query, agent_id, db, k)
+    else:
+        # legacy — use original embeddings.py
+        from services.embeddings import search_knowledge_base as legacy_search
+        results = await legacy_search(query, agent_id, db, k)
+
+    logger.info(f"📊 RAG search result: {len(results)} chunks returned")
+    if not results:
+        logger.warning(f"⚠️  RAG returned NO results for agent {agent_id} — agent may hallucinate!")
+
+    return results
+
+
+async def _search_chroma(
+    query: str,
+    agent_id: str,
+    db: Session,
+    top_k: int,
+) -> list[dict]:
+    """
+    ChromaDB ANN search → BM25 sparse re-score → MMR diversity filter.
+    No SQL embeddings loaded — O(log n) ANN via HNSW.
+    """
+    from services.vector_store import search_vector
+    from services.rag_config import ALPHA, TOP_K
+
+    # Step 1: ANN vector search — returns top_k * 2 candidates fast
+    candidates = await search_vector(query, agent_id, top_k=top_k * 2)
+    if not candidates:
+        return []
+
+    corpus = [c["content"] for c in candidates]
+
+    # Step 2: Add BM25 sparse score and compute hybrid
+    for c in candidates:
+        sparse = bm25_score(query, c["content"], corpus)
+        sparse_norm = min(sparse / 20.0, 1.0)
+        c["sparse_score"] = sparse_norm
+        c["dense_score"]  = c["score"]
+        c["score"]        = ALPHA * c["dense_score"] + (1 - ALPHA) * sparse_norm
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    pool = candidates[: top_k * 2]
+
+    # Step 3: MMR diversity filter
+    query_embedding = None
+    if pool and pool[0].get("embedding"):
+        query_embedding = pool[0]["embedding"]  # reuse first result's embedding as proxy
+    diverse = mmr_rerank(query_embedding or [], pool, top_k=top_k)
+
+    # Filter out low-relevance results
+    from services.rag_config import MIN_SCORE_THRESHOLD
+    diverse = [c for c in diverse if c["score"] >= MIN_SCORE_THRESHOLD]
+
+    # Strip heavyweight fields before returning
+    for c in diverse:
+        c.pop("embedding", None)
+
+    return diverse

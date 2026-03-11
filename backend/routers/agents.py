@@ -314,7 +314,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from models import Agent, KnowledgeBase, Company
+from models import Agent, KnowledgeBase, KBEntry, Company
 from schemas import AgentCreate, AgentUpdate, AgentResponse, SDKResponse
 from services.sdk_generator import generate_sdk_code
 from services.auth_service import get_current_company

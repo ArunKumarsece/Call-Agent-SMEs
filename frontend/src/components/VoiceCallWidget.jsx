@@ -802,6 +802,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
     const [textInput, setTextInput] = useState('');
     const [lastDecision, setLastDecision] = useState(null);
     const [showDecision, setShowDecision] = useState(false);
+    const [voiceLockState, setVoiceLockState] = useState('WAITING');
 
     const liveServiceRef = useRef(null);
     const messagesEndRef = useRef(null);
@@ -855,6 +856,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                     setPhase('agent_speaking');
                     setStatus(`${agentName} is greeting you...`);
                     addMessage('system', `Connected to ${agentName}. Agent is speaking first...`);
+                    setVoiceLockState('WAITING');
                     userTranscriptRef.current = '';
                     agentTranscriptRef.current = '';
                 },
@@ -928,6 +930,25 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                         userTranscriptRef.current = '';
                         setPhase('agent_speaking');
                         setStatus(`${agentName} is speaking...`);
+                    }
+                },
+
+                onCallEnd: () => {
+                    addMessage('system', 'Call ended by agent — goodbye!');
+                    // Small delay so the user hears the agent's goodbye audio
+                    setTimeout(() => endCall(), 1500);
+                },
+
+                onVoiceLockState: (state) => {
+                    setVoiceLockState(state);
+                    if (state === 'LOCKED') {
+                        addMessage('system', 'Voice locked — only your voice will be processed');
+                    }
+                },
+
+                onVoiceLockEvent: (event, data) => {
+                    if (event === 'rejected') {
+                        console.log(`[VL] Rejected voice: similarity=${data.similarity?.toFixed(2)}`);
                     }
                 },
             });
@@ -1131,6 +1152,44 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                         {phase === 'listening' && (
                             <div style={{ fontSize: 11, color: '#ef4444', fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase' }}>
                                 ● Live listening — speak naturally
+                            </div>
+                        )}
+
+                        {/* Voice Lock Status Indicator */}
+                        {connected && (
+                            <div style={{
+                                display: 'flex', alignItems: 'center', gap: 6,
+                                fontSize: 10, fontWeight: 600, marginTop: 4,
+                                padding: '3px 10px', borderRadius: 12,
+                                background: voiceLockState === 'LOCKED'
+                                    ? 'rgba(34,197,94,0.1)'
+                                    : voiceLockState === 'ENROLLING'
+                                        ? 'rgba(245,158,11,0.1)'
+                                        : 'rgba(148,163,184,0.1)',
+                                border: `1px solid ${voiceLockState === 'LOCKED'
+                                    ? 'rgba(34,197,94,0.3)'
+                                    : voiceLockState === 'ENROLLING'
+                                        ? 'rgba(245,158,11,0.3)'
+                                        : 'rgba(148,163,184,0.2)'}`,
+                                color: voiceLockState === 'LOCKED'
+                                    ? '#22c55e'
+                                    : voiceLockState === 'ENROLLING'
+                                        ? '#f59e0b'
+                                        : '#94a3b8',
+                            }}>
+                                <span style={{
+                                    width: 6, height: 6, borderRadius: '50%',
+                                    background: voiceLockState === 'LOCKED'
+                                        ? '#22c55e'
+                                        : voiceLockState === 'ENROLLING'
+                                            ? '#f59e0b'
+                                            : '#94a3b8',
+                                }} />
+                                {voiceLockState === 'LOCKED'
+                                    ? 'Voice Locked'
+                                    : voiceLockState === 'ENROLLING'
+                                        ? 'Enrolling voice...'
+                                        : 'Waiting...'}
                             </div>
                         )}
                     </div>

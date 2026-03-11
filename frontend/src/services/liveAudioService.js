@@ -758,12 +758,11 @@
  * Based on the original working implementation pattern.
  */
 
+import { SpeakerVoiceLock } from './speakerVoiceLock.js';
+
 const GEMINI_LIVE_MODEL = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
 const MIC_SAMPLE_RATE   = 16000;
 const OUT_SAMPLE_RATE   = 24000;
-const LOCK_RATIO        = 0.15;   // floor = 15% of median speech energy (tight gate)
-const CALIB_CHUNKS      = 15;     // collect 15 chunks (~3.8s) for a stable baseline
-const INTERRUPT_THRESH  = 6.0;    // must be 6x floor to count as real speech interruption
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -876,10 +875,8 @@ export class LiveAudioService {
         this._playing = false;
         this._cbs     = {};
         this._cfg     = null;
-        // voice lock
-        this._calibrated = false;
-        this._floor      = 0;
-        this._calibBuf   = [];
+        // Speaker voice lock (MFCC-based speaker verification)
+        this._voiceLock = null;
     }
 
     async connect(agentConfig, callbacks) {
@@ -888,10 +885,18 @@ export class LiveAudioService {
         this._stop = false;
         this._live = false;
         this._playing = false;
-        this._calibrated = false;
-        this._floor = 0;
-        this._calibBuf = [];
         this._kbContext = '';
+
+        // Initialize speaker voice lock with callbacks
+        this._voiceLock = new SpeakerVoiceLock({
+            onStateChange: (newState) => {
+                console.log(`[VL] → ${newState}`);
+                this._emit('onVoiceLockState', newState);
+            },
+            onVoiceLockEvent: (event, data) => {
+                this._emit('onVoiceLockEvent', event, data);
+            },
+        });
 
         try {
             // 1. Prime the player AudioContext during user-gesture
@@ -900,7 +905,7 @@ export class LiveAudioService {
             // 2. Fetch KB context for this agent (so Live Audio has knowledge base data)
             try {
                 const kbRes = await fetch(`/api/agents/${agentConfig.id || ''}/kb-context`, {
-                    headers: { 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` }
+                    headers: { 'Authorization': `Bearer ${localStorage.getItem('vf_access_token') || ''}` }
                 });
                 if (kbRes.ok) {
                     const kbData = await kbRes.json();
@@ -1024,7 +1029,13 @@ export class LiveAudioService {
 ` +
             `  "Delivery Tuesday-la vanthidum, tension vendam!"
 ` +
-            `Keep responses short — 1-2 sentences max. Voice conversation only, no bullet points.` +
+            `Keep responses short — 1-2 sentences max. Voice conversation only, no bullet points.\n` +
+            `CALL ENDING RULES:\n` +
+            `- If the user says bye/goodbye/end call/hang up/cut the call or anything indicating they want to end, ` +
+            `ALWAYS ask for confirmation first like "Seri, call end pannalama? Confirm pannunga."\n` +
+            `- Only after the user explicitly confirms (yes/ok/seri/aamaa/end it), say your final goodbye and include the exact token [END_CALL] at the very end of your response.\n` +
+            `- If the user says no/not yet/wait, continue the conversation normally.\n` +
+            `- NEVER include [END_CALL] unless the user has confirmed they want to end.` +
             (system_prompt ? `\n\n${system_prompt}` : '') + kbBlock;
 
         this._send({
@@ -1093,7 +1104,14 @@ export class LiveAudioService {
 
         // Transcript of what the agent said (enabled by outputAudioTranscription:{} in setup)
         const otx = sc.outputTranscription || sc.output_transcription;
-        if (otx?.text) this._emit('onTranscription', otx.text, false);
+        if (otx?.text) {
+            this._emit('onTranscription', otx.text, false);
+            // Detect [END_CALL] signal from agent
+            if (otx.text.includes('[END_CALL]')) {
+                console.log('[LA] Agent confirmed call end');
+                this._emit('onCallEnd');
+            }
+        }
     }
 
     disconnect() {
@@ -1112,36 +1130,29 @@ export class LiveAudioService {
         this._send({ clientContent: { turns:[{role:'user',parts:[{text:t}]}], turnComplete:true } });
     }
 
-    // ── Voice lock ────────────────────────────────────────────────────────────
+    // ── Voice lock (MFCC-based speaker verification) ──────────────────────────
+
+    /** Get current voice lock info for UI */
+    get voiceLockInfo() {
+        return this._voiceLock ? this._voiceLock.info : null;
+    }
 
     _processAudio(f32) {
-        const e = rmsEnergy(f32);
+        if (!this._voiceLock) return f32;
 
-        if (!this._calibrated) {
-            // Collect ALL chunks (including silence) to find the ambient noise floor.
-            // Using low-energy chunks gives a stable background level to gate against.
-            this._calibBuf.push(e);
-            if (this._calibBuf.length >= CALIB_CHUNKS) {
-                const s = [...this._calibBuf].sort((a, b) => a - b);
-                // Use the 20th-percentile energy as the ambient noise floor
-                const ambientFloor = s[Math.floor(s.length * 0.2)];
-                // Gate threshold = ambient floor * ratio, but at least 0.008 to ignore mic hiss
-                this._floor = Math.max(ambientFloor * LOCK_RATIO, 0.008);
-                this._calibrated = true;
-                console.log(`[VL] calibrated — ambient=${ambientFloor.toFixed(4)}, floor=${this._floor.toFixed(4)}`);
+        const result = this._voiceLock.process(f32);
+
+        // Handle interruption — if speaker is verified and agent is playing
+        if (this._playing && result.action === 'pass') {
+            const energy = rmsEnergy(f32);
+            if (energy > this._voiceLock.interruptThreshold) {
+                this._playing = false;
+                this._player.stop();
+                this._emit('onInterrupted');
             }
-            return f32;
         }
 
-        if (this._playing && e > this._floor * INTERRUPT_THRESH) {
-            this._playing = false;
-            this._player.stop();
-            // Don't send anything — Gemini Live handles interruption server-side via VAD.
-            this._emit('onInterrupted');
-        }
-
-        // Gate out anything below the floor (background noise, other voices at distance)
-        return e < this._floor ? new Float32Array(f32.length) : f32;
+        return result.audio;
     }
 
     // ── Mic ───────────────────────────────────────────────────────────────────
@@ -1165,16 +1176,29 @@ export class LiveAudioService {
         this._worklet = new AudioWorkletNode(this._micCtx, 'cap');
 
         this._worklet.port.onmessage = (ev) => {
-            // Wake the AudioContext every chunk — browsers auto-suspend it causing
-            // audio to stop flowing and then dump 10-20s of buffered audio at once.
             if (this._micCtx?.state === 'suspended') this._micCtx.resume();
-
             if (!this._live || this._muted || this._ws?.readyState !== WebSocket.OPEN) return;
+
+            // Always run voice lock processing (for calibration / enrollment)
             const proc = this._processAudio(ev.data);
-            const i16  = f32ToI16(proc);
+
+            // Pre-lock: skip sending to Gemini entirely
+            if (this._voiceLock && this._voiceLock.state !== 'LOCKED') return;
+
+            // While agent is speaking, send silence to Gemini to prevent
+            // echo-triggered server-side VAD interruptions.
+            // Client-side interruption detection in _processAudio handles
+            // genuine user interrupts by flipping _playing off first.
+            let chunk;
+            if (this._playing) {
+                chunk = new Uint8Array(proc.length * 2); // silence
+            } else {
+                chunk = new Uint8Array(f32ToI16(proc).buffer);
+            }
+
             this._send({
                 realtimeInput: {
-                    mediaChunks: [{ mimeType:`audio/pcm;rate=${MIC_SAMPLE_RATE}`, data:toB64(new Uint8Array(i16.buffer)) }]
+                    mediaChunks: [{ mimeType:`audio/pcm;rate=${MIC_SAMPLE_RATE}`, data:toB64(chunk) }]
                 }
             });
         };

@@ -109,29 +109,30 @@
 
 """Pydantic schemas for request/response validation."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
+import re
 
 
 # ─── Agent Schemas ────────────────────────────────────────
 
 class AgentCreate(BaseModel):
-    name: str
-    role: str
-    description: Optional[str] = ""
-    system_prompt: Optional[str] = ""
-    voice_id: Optional[str] = "Puck"
-    language: Optional[str] = "tanglish"
+    name: str = Field(..., min_length=1, max_length=100)
+    role: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = Field("", max_length=1000)
+    system_prompt: Optional[str] = Field("", max_length=5000)
+    voice_id: Optional[str] = Field("Puck", max_length=50)
+    language: Optional[str] = Field("tanglish", max_length=30)
 
 
 class AgentUpdate(BaseModel):
-    name: Optional[str] = None
-    role: Optional[str] = None
-    description: Optional[str] = None
-    system_prompt: Optional[str] = None
-    voice_id: Optional[str] = None
-    language: Optional[str] = None
+    name: Optional[str] = Field(None, max_length=100)
+    role: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = Field(None, max_length=1000)
+    system_prompt: Optional[str] = Field(None, max_length=5000)
+    voice_id: Optional[str] = Field(None, max_length=50)
+    language: Optional[str] = Field(None, max_length=30)
 
 
 class AgentResponse(BaseModel):
@@ -153,10 +154,10 @@ class AgentResponse(BaseModel):
 # ─── Knowledge Base Schemas ───────────────────────────────
 
 class KBCreate(BaseModel):
-    name: str
-    kb_type: str  # 'static' or 'dynamic'
-    source_url: Optional[str] = None
-    sync_interval: Optional[int] = 300
+    name: str = Field(..., min_length=1, max_length=200)
+    kb_type: str = Field(..., max_length=20)  # 'static' or 'dynamic'
+    source_url: Optional[str] = Field(None, max_length=2000)
+    sync_interval: Optional[int] = Field(300, ge=60, le=86400)
 
 
 class KBUpdate(BaseModel):
@@ -183,8 +184,8 @@ class KBResponse(BaseModel):
 # ─── KB Entry Schemas ─────────────────────────────────────
 
 class KBEntryCreate(BaseModel):
-    content: str
-    source_file: Optional[str] = "manual"
+    content: str = Field(..., min_length=1, max_length=50000)
+    source_file: Optional[str] = Field("manual", max_length=500)
 
 
 class KBEntryResponse(BaseModel):
@@ -212,25 +213,32 @@ class SDKResponse(BaseModel):
 # ─── Chat Schema (for testing) ───────────────────────────
 
 class ChatMessage(BaseModel):
-    message: str
-    agent_id: str
+    message: str = Field(..., min_length=1, max_length=2000)
+    agent_id: str = Field(..., max_length=100)
 
 
 # ─── Auth / Company Schemas ───────────────────────────────
 
 class CompanyRegister(BaseModel):
-    company_name: str
-    full_name: Optional[str] = None
-    email: str
-    password: str
+    company_name: str = Field(..., min_length=1, max_length=200)
+    full_name: Optional[str] = Field(None, max_length=200)
+    email: str = Field(..., max_length=320)
+    password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', v):
+            raise ValueError('Invalid email format')
+        return v.lower()
 
     class Config:
         from_attributes = True
 
 
 class CompanyLogin(BaseModel):
-    email: str
-    password: str
+    email: str = Field(..., max_length=320)
+    password: str = Field(..., max_length=128)
 
 
 class CompanyResponse(BaseModel):
@@ -258,5 +266,5 @@ class UpdateCompanyProfile(BaseModel):
 
 
 class ChangePassword(BaseModel):
-    current_password: str
-    new_password: str
+    current_password: str = Field(..., max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)

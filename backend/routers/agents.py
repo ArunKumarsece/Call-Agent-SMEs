@@ -311,7 +311,7 @@
 
 """CRUD API routes for Agents — company-scoped with multi-agent + enhanced RAG."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from database import get_db
 from models import Agent, KnowledgeBase, KBEntry, Company
@@ -401,11 +401,14 @@ async def delete_agent(
 @router.get("/{agent_id}/sdk", response_model=SDKResponse)
 async def get_agent_sdk(
     agent_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     company: Company = Depends(get_current_company),
 ):
     agent = _get_or_404(agent_id, company.id, db)
-    sdk = generate_sdk_code(agent.id, agent.name)
+    # Derive server URL from the incoming request so SDK code works when deployed
+    server_url = str(request.base_url).rstrip("/")
+    sdk = generate_sdk_code(agent.id, agent.name, server_url=server_url)
     return SDKResponse(
         agent_id=agent.id, agent_name=agent.name,
         html_snippet=sdk["html_snippet"], js_config=sdk["js_config"],
@@ -423,17 +426,42 @@ async def chat_with_agent(
 ):
     from services.multi_agent import orchestrator
     from services.enhanced_rag import search_knowledge_base_unified, assemble_context
+    from services.security_guard import (
+        detect_prompt_injection, sanitize_user_message,
+        validate_conversation_history, chat_limiter,
+    )
 
     agent = _get_or_404(agent_id, company.id, db)
-    message = body.get("message", "").strip()
-    if not message:
+
+    # Rate limit per company
+    if not chat_limiter.is_allowed(company.id):
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait.")
+
+    raw_message = body.get("message", "").strip()
+    if not raw_message:
         raise HTTPException(status_code=400, detail="Message is required")
 
-    conversation_history = body.get("history", [])
+    # Sanitize & check injection
+    message = sanitize_user_message(raw_message, max_length=2000)
+    is_injection, _ = detect_prompt_injection(raw_message)
+    if is_injection:
+        raise HTTPException(status_code=400, detail="Message blocked by security filter")
+
+    # Validate & sanitize conversation history
+    raw_history = body.get("history", [])
+    conversation_history = validate_conversation_history(raw_history)
+
+    # Count total KB entries for this agent so LLM knows it's seeing a subset
+    kb_ids_for_count = db.query(KnowledgeBase.id).filter(KnowledgeBase.agent_id == agent_id).all()
+    total_kb_entries = 0
+    if kb_ids_for_count:
+        total_kb_entries = db.query(KBEntry).filter(
+            KBEntry.kb_id.in_([k[0] for k in kb_ids_for_count])
+        ).count()
 
     try:
         results = await search_knowledge_base_unified(message, agent_id, db)
-        context = assemble_context(results)
+        context = assemble_context(results, total_kb_entries=total_kb_entries)
         if not context.strip():
             context = "[NO RELEVANT KNOWLEDGE BASE ENTRIES FOUND]"
     except Exception as e:
@@ -466,13 +494,16 @@ async def get_agent_kb_context(
     db: Session = Depends(get_db),
     company: Company = Depends(get_current_company),
 ):
-    """Return all KB entries for an agent as a single context string for Live Audio."""
+    """Return KB summary context for Live Audio — includes total count metadata."""
     agent = _get_or_404(agent_id, company.id, db)
     from services.rag_config import MAX_CONTEXT_CHARS
     kb_ids = db.query(KnowledgeBase.id).filter(KnowledgeBase.agent_id == agent_id).all()
     kb_ids = [k[0] for k in kb_ids]
     if not kb_ids:
-        return {"context": ""}
+        return {"context": "", "total_entries": 0}
+
+    total_entries = db.query(KBEntry).filter(KBEntry.kb_id.in_(kb_ids)).count()
+
     entries = db.query(KBEntry.content).filter(KBEntry.kb_id.in_(kb_ids)).all()
     chunks = []
     total = 0
@@ -485,7 +516,20 @@ async def get_agent_kb_context(
             break
         chunks.append(c)
         total += len(c)
-    return {"context": "\n\n".join(chunks)}
+
+    context = "\n\n".join(chunks)
+
+    # Prepend metadata so voice LLM knows the KB size
+    shown = len(chunks)
+    if total_entries > shown:
+        header = (
+            f"[KB INFO: Showing {shown} entries out of {total_entries} total. "
+            f"This is a subset — for broad questions, mention highlights and "
+            f"ask the user to be more specific.]"
+        )
+        context = f"{header}\n\n{context}"
+
+    return {"context": context, "total_entries": total_entries}
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

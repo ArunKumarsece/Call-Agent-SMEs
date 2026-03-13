@@ -38,6 +38,7 @@ const VERIFY_TIGHTEN = 0.004;      // Tighten per verified frame
 const ADAPT_RATE = 0.05;           // Centroid adaptation speed
 const ENERGY_FLOOR = 0.006;        // Absolute minimum RMS to consider
 const SPEECH_MULT = 2.0;           // Speech = ambient * SPEECH_MULT
+const ZCR_MAX = 0.35;              // Max zero-crossing rate for speech (noise is higher)
 
 // ─── DSP: FFT (Radix-2 in-place) ─────────────────────────────────────────────
 
@@ -116,6 +117,25 @@ function rms(s) {
     let v = 0;
     for (let i = 0; i < s.length; i++) v += s[i] * s[i];
     return Math.sqrt(v / (s.length || 1));
+}
+
+/** Zero-crossing rate: proportion of sign changes. Speech ~0.05-0.25, noise ~0.3-0.5. */
+function zcr(s) {
+    if (s.length < 2) return 0;
+    let crossings = 0;
+    for (let i = 1; i < s.length; i++) {
+        if ((s[i] >= 0) !== (s[i - 1] >= 0)) crossings++;
+    }
+    return crossings / (s.length - 1);
+}
+
+/** Check if a chunk looks like speech (energy + ZCR heuristic). */
+function isSpeechLike(samples, energyThresh) {
+    const e = rms(samples);
+    if (e < energyThresh) return false;
+    // Speech has structured formants → lower ZCR than random noise
+    const z = zcr(samples);
+    return z < ZCR_MAX;
 }
 
 /** Extract per-frame MFCCs from a Float32Array chunk. Returns array of Float64Array[13]. */
@@ -244,6 +264,7 @@ export class SpeakerVoiceLock {
         // Enrollment
         this._enrollFeats = [];   // Array of 26D feature vectors
         this._enrollCount = 0;
+        this._consecutiveSpeech = 0; // consecutive speech-like chunks
 
         // Speaker profile
         this._centroid = null;    // 26D mean feature vector
@@ -317,17 +338,23 @@ export class SpeakerVoiceLock {
     _onEnrolling(f32, energy) {
         this._enrollCount++;
 
-        // Is this real speech?
-        if (energy > this._speechThresh) {
-            const feat = chunkFeature(f32);
-            if (feat) {
-                this._enrollFeats.push(feat);
-                this._lastDecision = 'enrolling';
-                this._emitEvent('enrolling', {
-                    frames: this._enrollFeats.length,
-                    needed: ENROLL_MIN,
-                });
+        // Is this real speech? (energy + ZCR check to filter noise)
+        if (isSpeechLike(f32, this._speechThresh)) {
+            this._consecutiveSpeech++;
+            // Require at least 2 consecutive speech-like chunks to accept
+            if (this._consecutiveSpeech >= 2) {
+                const feat = chunkFeature(f32);
+                if (feat) {
+                    this._enrollFeats.push(feat);
+                    this._lastDecision = 'enrolling';
+                    this._emitEvent('enrolling', {
+                        frames: this._enrollFeats.length,
+                        needed: ENROLL_MIN,
+                    });
+                }
             }
+        } else {
+            this._consecutiveSpeech = 0;
         }
 
         // Lock as soon as we have enough
@@ -367,6 +394,13 @@ export class SpeakerVoiceLock {
     _onLocked(f32, energy) {
         // Sub-threshold → gate
         if (energy < this._speechThresh) {
+            this._lastSim = 0;
+            this._lastDecision = 'gate';
+            return { action: 'gate', audio: new Float32Array(f32.length) };
+        }
+
+        // Also gate if it looks like noise (high ZCR), not speech
+        if (zcr(f32) >= ZCR_MAX) {
             this._lastSim = 0;
             this._lastDecision = 'gate';
             return { action: 'gate', audio: new Float32Array(f32.length) };
@@ -471,6 +505,7 @@ export class SpeakerVoiceLock {
         this._speechThresh = ENERGY_FLOOR;
         this._enrollFeats = [];
         this._enrollCount = 0;
+        this._consecutiveSpeech = 0;
         this._centroid = null;
         this._invVar = null;
         this._threshold = VERIFY_INIT;
@@ -482,6 +517,6 @@ export class SpeakerVoiceLock {
     }
 
     get interruptThreshold() {
-        return this._speechThresh * 3.5;
+        return this._speechThresh * 5.0;
     }
 }

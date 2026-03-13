@@ -892,15 +892,14 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                     setMessages(prev => {
                         const last = prev[prev.length - 1];
                         if (last?.role === 'agent') {
-                            // Mark it as interrupted rather than deleting
                             const updated = [...prev];
                             updated[updated.length - 1] = { ...last, text: last.text + ' [interrupted]' };
                             return updated;
                         }
                         return prev;
                     });
-                    setPhase('listening');
-                    setStatus('Go ahead — I\'m listening...');
+                    setPhase('connected');
+                    setStatus('Listening...');
                 },
 
                 onTranscription: (text, isUser) => {
@@ -916,8 +915,8 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                             updateLastMessage('user', userTranscriptRef.current);
                         }
                         agentTranscriptRef.current = '';
-                        setPhase('listening');
-                        setStatus('Listening...');
+                        setPhase('connected');
+                        setStatus('Connected');
                     } else {
                         // Accumulate agent response transcript
                         if (agentTranscriptRef.current === '') {
@@ -937,6 +936,13 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                     addMessage('system', 'Call ended by agent — goodbye!');
                     // Small delay so the user hears the agent's goodbye audio
                     setTimeout(() => endCall(), 1500);
+                },
+
+                onTurnComplete: () => {
+                    // Agent finished speaking
+                    agentTranscriptRef.current = '';
+                    setPhase('connected');
+                    setStatus('Connected');
                 },
 
                 onVoiceLockState: (state) => {
@@ -1017,8 +1023,8 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
         idle:          { bg: 'linear-gradient(135deg,#22c55e,#16a34a)', icon: <PhoneIcon />, shadow: '0 4px 20px rgba(34,197,94,0.4)', pulse: false },
         ringing:       { bg: 'linear-gradient(135deg,#f59e0b,#d97706)', icon: <PhoneIcon />, shadow: '0 4px 20px rgba(245,158,11,0.5)', pulse: true },
         connecting:    { bg: 'linear-gradient(135deg,#6c63ff,#4f46e5)', icon: <ClockIcon />, shadow: '0 4px 20px rgba(108,99,255,0.4)', pulse: false },
+        connected:     { bg: 'linear-gradient(135deg,#6c63ff,#4f46e5)', icon: <MicIcon />, shadow: '0 4px 20px rgba(108,99,255,0.5)', pulse: true },
         agent_speaking:{ bg: 'linear-gradient(135deg,#6c63ff,#4f46e5)', icon: <SpeakerIcon />, shadow: '0 4px 20px rgba(108,99,255,0.5)', pulse: true },
-        listening:     { bg: 'linear-gradient(135deg,#ef4444,#dc2626)', icon: <MicIcon />, shadow: '0 4px 20px rgba(239,68,68,0.5)', pulse: true },
     };
     const pc = phaseConfig[phase] || phaseConfig.idle;
 
@@ -1026,8 +1032,8 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
         idle:          'Ready',
         ringing:       'Ringing...',
         connecting:    'Connecting...',
+        connected:     'Connected',
         agent_speaking:`${agentName} speaking`,
-        listening:     'Live — Listening',
     }[phase] || 'Ready';
 
     return (
@@ -1142,16 +1148,16 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                         </button>
 
                         {/* Live waveform indicator */}
-                        {phase === 'listening' && <WaveBar active={!muted} />}
+                        {(phase === 'connected' || phase === 'agent_speaking') && <WaveBar active={!muted} />}
 
                         {phase === 'agent_speaking' && (
                             <div style={{ fontSize: 11, color: 'var(--primary)', fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase' }}>
                                 Agent speaking — just talk to interrupt
                             </div>
                         )}
-                        {phase === 'listening' && (
-                            <div style={{ fontSize: 11, color: '#ef4444', fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                                ● Live listening — speak naturally
+                        {phase === 'connected' && (
+                            <div style={{ fontSize: 11, color: 'var(--primary)', fontWeight: 700, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                                ● Live — speak naturally
                             </div>
                         )}
 

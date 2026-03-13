@@ -170,6 +170,7 @@ from fastapi.staticfiles import StaticFiles
 from database import init_db
 from routers import agents, knowledge_base, voice_call
 from routers.auth import router as auth_router
+from routers.widget import router as widget_router
 from services.gemini_service import AVAILABLE_VOICES
 import os
 import logging
@@ -188,6 +189,7 @@ app = FastAPI(
 )
 
 # ─── CORS ─────────────────────────────────────────────────
+# Dashboard origins use credentials (cookie-based refresh tokens)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:4173"],
@@ -195,6 +197,41 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Widget routes need Access-Control-Allow-Origin: * for external embeds.
+# CORSMiddleware doesn't support per-route rules, so we add headers manually.
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
+
+
+class WidgetCORSMiddleware(BaseHTTPMiddleware):
+    """Add permissive CORS headers for /api/widget/* and /static/widget/* routes."""
+
+    async def dispatch(self, request: StarletteRequest, call_next):
+        path = request.url.path
+        is_widget = path.startswith("/api/widget/") or path.startswith("/static/widget/")
+
+        if is_widget and request.method == "OPTIONS":
+            from starlette.responses import Response
+            return Response(status_code=200, headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Max-Age": "86400",
+            })
+
+        response = await call_next(request)
+
+        if is_widget:
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "*"
+
+        return response
+
+
+app.add_middleware(WidgetCORSMiddleware)
 
 # ─── Static & Uploads ─────────────────────────────────────
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -209,6 +246,7 @@ app.include_router(auth_router)
 app.include_router(agents.router)
 app.include_router(knowledge_base.router)
 app.include_router(voice_call.router)
+app.include_router(widget_router)
 
 
 # ─── Startup ──────────────────────────────────────────────

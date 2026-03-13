@@ -1,21 +1,22 @@
-/**
+﻿/**
  * AI Voice Agent Widget — Self-Contained Embeddable SDK
- * Uses @google/genai SDK via CDN for real-time Gemini Live API.
- * Identical code path as the dashboard test call — guaranteed compatibility.
+ * ═══════════════════════════════════════════════════════
+ * Connects directly to Gemini Live API via raw WebSocket.
+ * Same audio pipeline as the dashboard — guaranteed compatibility.
  *
  * Usage:
  *   <script>
  *     window.AgentWidgetConfig = {
  *       agentId: "your-agent-id",
- *       serverUrl: "http://localhost:8000",
- *       theme: "dark",
- *       position: "bottom-right",
+ *       serverUrl: "https://your-backend.com",
+ *       theme: "dark",           // "dark" | "light"
+ *       position: "bottom-right", // "bottom-right" | "bottom-left"
  *       title: "AI Assistant",
  *       subtitle: "Click to start a voice call",
  *       primaryColor: "#6C63FF"
  *     };
  *   </script>
- *   <script src="http://YOUR_SERVER/static/widget/agent-widget.js"></script>
+ *   <script src="https://your-backend.com/static/widget/agent-widget.js"></script>
  */
 (function () {
     'use strict';
@@ -23,289 +24,460 @@
     // ═════════════════════════════════════════════════════════════════
     // Constants
     // ═════════════════════════════════════════════════════════════════
-    var MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
-    var INPUT_SAMPLE_RATE = 16000;
-    var OUTPUT_SAMPLE_RATE = 24000;
+    var MODEL = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
+    var MIC_RATE = 16000;
+    var OUT_RATE = 24000;
 
     // ═════════════════════════════════════════════════════════════════
-    // Helpers
+    // PCM Helpers
     // ═════════════════════════════════════════════════════════════════
-    function encodeToBase64(bytes) {
-        var bin = '';
-        for (var i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
-        return btoa(bin);
+    function toB64(uint8) {
+        var s = '';
+        for (var i = 0; i < uint8.byteLength; i++) s += String.fromCharCode(uint8[i]);
+        return btoa(s);
     }
 
-    function decodeFromBase64(b64) {
+    function fromB64(b64) {
         var bin = atob(b64);
-        var bytes = new Uint8Array(bin.length);
-        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        return bytes;
+        var out = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out;
+    }
+
+    function f32ToI16(f32) {
+        var i16 = new Int16Array(f32.length);
+        for (var i = 0; i < f32.length; i++) {
+            var s = Math.max(-1, Math.min(1, f32[i]));
+            i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        return i16;
+    }
+
+    function i16ToF32(bytes) {
+        var i16 = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
+        var f32 = new Float32Array(i16.length);
+        for (var i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768.0;
+        return f32;
     }
 
     // ═════════════════════════════════════════════════════════════════
-    // LiveAudioService — uses @google/genai SDK (loaded from CDN)
-    // Same code path as dashboard VoiceCallWidget → liveAudioService.js
+    // Player — separate 24kHz AudioContext for gapless playback
     // ═════════════════════════════════════════════════════════════════
-    function LiveAudioService(GoogleGenAI, Modality) {
-        this._GoogleGenAI = GoogleGenAI;
-        this._Modality = Modality;
-        this.session = null;
-        this.audioContext = null;
-        this.mediaStream = null;
-        this.source = null;
-        this.processor = null;
-        this.nextPlayTime = 0;
-        this.isMuted = false;
-        this.connected = false;
-        this.callbacks = {};
+    function Player() {
+        this._ctx = null;
+        this._t = 0;
+        this._srcs = [];
     }
 
-    LiveAudioService.prototype.connect = async function (agentConfig, callbacks) {
-        this.callbacks = callbacks || {};
+    Player.prototype.prime = function () {
+        if (!this._ctx || this._ctx.state === 'closed') {
+            var C = window.AudioContext || window.webkitAudioContext;
+            this._ctx = new C({ sampleRate: OUT_RATE });
+        }
+        if (this._ctx.state === 'suspended') this._ctx.resume();
+        return this._ctx;
+    };
+
+    Player.prototype.play = function (bytes) {
+        var ctx = this.prime();
+        var f32 = i16ToF32(bytes);
+        if (!f32.length) return;
+        var buf = ctx.createBuffer(1, f32.length, OUT_RATE);
+        buf.copyToChannel(f32, 0);
+        var src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ctx.destination);
+        var at = Math.max(ctx.currentTime, this._t);
+        src.start(at);
+        this._t = at + buf.duration;
+        var self = this;
+        this._srcs.push(src);
+        src.onended = function () {
+            var idx = self._srcs.indexOf(src);
+            if (idx >= 0) self._srcs.splice(idx, 1);
+        };
+    };
+
+    Player.prototype.stop = function () {
+        for (var i = 0; i < this._srcs.length; i++) {
+            try { this._srcs[i].stop(0); } catch (_) { }
+        }
+        this._srcs = [];
+        if (this._ctx && this._ctx.state !== 'closed') this._t = this._ctx.currentTime;
+    };
+
+    Player.prototype.close = function () {
+        this.stop();
+        if (this._ctx) { try { this._ctx.close(); } catch (_) { } this._ctx = null; }
+    };
+
+    // ═════════════════════════════════════════════════════════════════
+    // WidgetLiveService — raw WebSocket to Gemini Live API
+    // Matches the dashboard's LiveAudioService exactly.
+    // ═════════════════════════════════════════════════════════════════
+    function WidgetLiveService() {
+        this._ws = null;
+        this._micCtx = null;
+        this._processor = null;
+        this._stream = null;
+        this._player = new Player();
+        this._muted = false;
+        this._live = false;
+        this._stop = false;
+        this._playing = false;
+        this._turnInterrupted = false;
+        this._cbs = {};
+        this._agentData = null;
+        this._kbContext = '';
+        this._keepalive = null;
+    }
+
+    WidgetLiveService.prototype.connect = async function (serverUrl, agentId, callbacks) {
+        this._cbs = callbacks || {};
+        this._stop = false;
+        this._live = false;
+        this._playing = false;
+        this._turnInterrupted = false;
 
         try {
-            // ── Get API key ──────────────────────────────────
-            var cfg = window.AgentWidgetConfig || {};
-            var serverUrl = (cfg.serverUrl || 'http://localhost:8000').replace(/\/$/, '');
-            var apiKey = '';
+            // 1. Prime player AudioContext (must happen in user gesture context)
+            this._player.prime();
 
-            try {
-                var r = await fetch(serverUrl + '/api/config/gemini-key');
-                if (r.ok) {
-                    var d = await r.json();
-                    apiKey = d.api_key || d.key || '';
-                }
-            } catch (_) { }
+            // 2. Boot — fetch agent config + KB context + Gemini key
+            var bootRes = await fetch(serverUrl + '/api/widget/' + agentId + '/boot');
+            if (!bootRes.ok) throw new Error('Failed to load agent config (HTTP ' + bootRes.status + ')');
+            var boot = await bootRes.json();
 
-            if (!apiKey && cfg.apiKey) apiKey = cfg.apiKey;
-            if (!apiKey && window.GEMINI_API_KEY) apiKey = window.GEMINI_API_KEY;
-            if (!apiKey) throw new Error('No Gemini API key available.');
+            this._agentData = boot.agent;
+            this._kbContext = boot.kb_context || '';
+            var apiKey = boot.gemini_key;
 
-            console.log('[LiveAudio] Got API key, length:', apiKey.length);
+            if (!apiKey) throw new Error('No Gemini API key configured on the server.');
 
-            // ── Build system instruction ─────────────────────
-            var systemText = [
-                'Role: ' + (agentConfig.role || 'AI Assistant'),
-                'Name: ' + (agentConfig.name || 'Assistant'),
-                '',
-                'System Instructions:',
-                agentConfig.system_prompt || 'You are a helpful AI assistant.',
-                '',
-                'Guidelines:',
-                '1. Keep responses conversational and concise — this is a voice call.',
-                '2. Respond in Tanglish (a natural mix of Tamil and English).',
-                '3. Use Tamil script for Tamil words.',
-                '4. Be friendly, warm, and helpful like a real human.',
-                '5. Avoid long paragraphs. Keep sentences short for voice.',
-            ].join('\n');
+            console.log('[Widget] Boot OK — agent:', boot.agent.name, ', KB:', this._kbContext.length, 'chars');
 
-            var voiceName = agentConfig.voice_id || agentConfig.voice || 'Puck';
+            // 3. Connect WebSocket — blocks until setupComplete
+            var wsUrl =
+                'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta' +
+                '.GenerativeService.BidiGenerateContent?key=' + apiKey;
 
-            // ── Initialize SDK (exactly like dashboard) ──────
-            console.log('[LiveAudio] Creating GoogleGenAI client with SDK');
-            var ai = new this._GoogleGenAI({ apiKey: apiKey });
-
-            // ── Start microphone + audio context ─────────────
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: INPUT_SAMPLE_RATE });
-            this.mediaStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    channelCount: 1,
-                    sampleRate: INPUT_SAMPLE_RATE,
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                }
-            });
-
-            // ── Connect via SDK Live API (same as dashboard) ─
-            console.log('[LiveAudio] Connecting to', MODEL, 'via SDK live.connect()');
-            var self = this;
-
-            this.session = await ai.live.connect({
-                model: MODEL,
-                config: {
-                    responseModalities: [this._Modality.AUDIO],
-                    speechConfig: {
-                        voiceConfig: {
-                            prebuiltVoiceConfig: { voiceName: voiceName }
-                        }
-                    },
-                    systemInstruction: systemText,
-                    inputAudioTranscription: {},
-                    outputAudioTranscription: {},
-                },
-                callbacks: {
-                    onopen: function () {
-                        console.log('[LiveAudio] ✅ SDK session opened');
-                        self.connected = true;
-                        self._startMicStreaming();
-                        self.callbacks.onOpen && self.callbacks.onOpen();
-                    },
-                    onclose: function (e) {
-                        console.log('[LiveAudio] SDK session closed', e);
-                        self.connected = false;
-                        self.callbacks.onClose && self.callbacks.onClose();
-                    },
-                    onerror: function (e) {
-                        console.error('[LiveAudio] SDK session error:', e);
-                        self.callbacks.onError && self.callbacks.onError(e);
-                    },
-                    onmessage: function (message) {
-                        self._handleSDKMessage(message);
-                    },
-                },
-            });
-
-            console.log('[LiveAudio] ✅ SDK live.connect() returned session');
+            await this._openWS(wsUrl);
             return true;
-        } catch (err) {
-            console.error('[LiveAudio] Connect error:', err);
-            this.callbacks.onError && this.callbacks.onError(err);
+        } catch (e) {
+            console.error('[Widget] Connect error:', e);
+            this._emit('onError', e);
             return false;
         }
     };
 
-    LiveAudioService.prototype._handleSDKMessage = function (message) {
-        // The SDK returns LiveServerMessage objects with typed fields
-
-        // ── Model audio output ───────────────────────────
-        if (message.serverContent && message.serverContent.modelTurn && message.serverContent.modelTurn.parts) {
-            var parts = message.serverContent.modelTurn.parts;
-            for (var i = 0; i < parts.length; i++) {
-                var part = parts[i];
-                if (part.inlineData && part.inlineData.data) {
-                    this._playAudio(part.inlineData.data);
-                }
-                if (part.text && this.callbacks.onTranscription) {
-                    this.callbacks.onTranscription(part.text, false);
-                }
-            }
-        }
-
-        // ── Input transcription (what user said) ─────────
-        if (message.serverContent && message.serverContent.inputTranscription && message.serverContent.inputTranscription.text) {
-            this.callbacks.onTranscription && this.callbacks.onTranscription(
-                message.serverContent.inputTranscription.text, true
-            );
-        }
-
-        // ── Output transcription (what agent said) ───────
-        if (message.serverContent && message.serverContent.outputTranscription && message.serverContent.outputTranscription.text) {
-            this.callbacks.onTranscription && this.callbacks.onTranscription(
-                message.serverContent.outputTranscription.text, false
-            );
-        }
-
-        // ── Interrupted ──────────────────────────────────
-        if (message.serverContent && message.serverContent.interrupted) {
-            this.nextPlayTime = 0;
-            this.callbacks.onInterrupted && this.callbacks.onInterrupted();
-        }
-    };
-
-    LiveAudioService.prototype._startMicStreaming = function () {
-        this.source = this.audioContext.createMediaStreamSource(this.mediaStream);
-        this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+    WidgetLiveService.prototype._openWS = function (url) {
         var self = this;
+        return new Promise(function (resolve, reject) {
+            var ws = new WebSocket(url);
+            ws.binaryType = 'arraybuffer';
+            self._ws = ws;
 
-        this.processor.onaudioprocess = function (e) {
-            if (!self.connected || self.isMuted || !self.session) return;
+            var timer = setTimeout(function () {
+                reject(new Error('Timeout waiting for Gemini setup'));
+                try { ws.close(); } catch (_) { }
+            }, 15000);
 
-            var inputData = e.inputBuffer.getChannelData(0);
+            ws.onopen = function () {
+                console.log('[Widget] WS open → sending setup');
+                self._sendSetup();
+            };
 
-            // Float32 → PCM16
-            var pcm16 = new Int16Array(inputData.length);
-            for (var i = 0; i < inputData.length; i++) {
-                var s = Math.max(-1, Math.min(1, inputData[i]));
-                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-            }
+            ws.onmessage = async function (evt) {
+                var text = typeof evt.data === 'string'
+                    ? evt.data
+                    : new TextDecoder().decode(new Uint8Array(evt.data));
+                var msg;
+                try { msg = JSON.parse(text); } catch (_) { return; }
 
-            // Send to Gemini via SDK's sendRealtimeInput
-            var bytes = new Uint8Array(pcm16.buffer);
-            var base64 = encodeToBase64(bytes);
-            try {
-                self.session.sendRealtimeInput({
-                    media: {
-                        mimeType: 'audio/pcm;rate=' + INPUT_SAMPLE_RATE,
-                        data: base64
+                // setupComplete
+                if (msg.setupComplete !== undefined || msg.setup_complete !== undefined) {
+                    console.log('[Widget] setupComplete ✅');
+                    clearTimeout(timer);
+                    try {
+                        await self._startMic();
+                        self._live = true;
+                        self._emit('onOpen');
+                        self._greet();
+                        resolve();
+                    } catch (e) {
+                        reject(new Error('Mic: ' + e.message));
                     }
-                });
-            } catch (err) { /* ignore send errors during close */ }
-        };
+                    return;
+                }
 
-        this.source.connect(this.processor);
-        this.processor.connect(this.audioContext.destination);
-    };
+                if (msg.error) {
+                    clearTimeout(timer);
+                    var err = new Error(msg.error.message || JSON.stringify(msg.error));
+                    reject(err);
+                    self._emit('onError', err);
+                    return;
+                }
 
-    LiveAudioService.prototype._playAudio = function (base64Data) {
-        if (!this.audioContext) return;
-        try {
-            var bytes = decodeFromBase64(base64Data);
-            var pcm16 = new Int16Array(bytes.buffer);
-            var float32 = new Float32Array(pcm16.length);
-            for (var i = 0; i < pcm16.length; i++) float32[i] = pcm16[i] / 32768.0;
+                self._handleContent(msg);
+            };
 
-            var buffer = this.audioContext.createBuffer(1, float32.length, OUTPUT_SAMPLE_RATE);
-            buffer.getChannelData(0).set(float32);
+            ws.onerror = function () {
+                clearTimeout(timer);
+                reject(new Error('WebSocket error'));
+            };
 
-            var src = this.audioContext.createBufferSource();
-            src.buffer = buffer;
-            src.connect(this.audioContext.destination);
-
-            var now = this.audioContext.currentTime;
-            if (this.nextPlayTime < now) this.nextPlayTime = now;
-            src.start(this.nextPlayTime);
-            this.nextPlayTime += buffer.duration;
-        } catch (err) {
-            console.error('[LiveAudio] Playback error:', err);
-        }
-    };
-
-    LiveAudioService.prototype.sendText = function (text) {
-        if (!this.session) return;
-        this.session.sendClientContent({
-            turns: [{ role: 'user', parts: [{ text: text }] }],
-            turnComplete: true
+            ws.onclose = function (e) {
+                clearTimeout(timer);
+                self._live = false;
+                if (!self._stop) {
+                    var reason = e.reason || ('code ' + e.code);
+                    console.warn('[Widget] WS closed:', reason);
+                    self._emit('onClose');
+                }
+            };
         });
     };
 
-    LiveAudioService.prototype.toggleMute = function () {
-        this.isMuted = !this.isMuted;
-        return this.isMuted;
+    WidgetLiveService.prototype._sendSetup = function () {
+        var agent = this._agentData || {};
+        var kbContext = this._kbContext || '';
+
+        var kbBlock = kbContext
+            ? '\n\nKNOWLEDGE BASE (ONLY use this information to answer questions — NEVER make up information not listed here):\n' +
+              kbContext +
+              '\n\nCRITICAL RESPONSE RULES FOR KNOWLEDGE BASE:\n' +
+              '- If the KB context starts with "[KB INFO: ...]", it tells you how many total entries exist vs what you see. You are seeing only a SMALL SUBSET.\n' +
+              '- BROAD QUERIES ("list all products", "what do you have", "tell me everything"):\n' +
+              '  * NEVER list every item one-by-one. This is a voice call — long lists are terrible UX.\n' +
+              '  * Instead: mention the CATEGORIES you see and say how many total products you have.\n' +
+              '  * Then ASK the user which category interests them.\n' +
+              '  * Keep it to 2-3 sentences MAX.\n' +
+              '- SPECIFIC QUERIES: give full details from context.\n' +
+              '- If the user asks something not covered, say you don\'t have that information.'
+            : '';
+
+        var sys =
+            'You are ' + (agent.name || 'AI') + ', a ' + (agent.role || 'assistant') + '. ' +
+            'ALWAYS respond in Tanglish — a natural spoken mix of Tamil and English, ' +
+            'the way people actually talk in Tamil Nadu. ' +
+            'Write Tamil words in Tamil script, English words in English. ' +
+            'NEVER write pure Tamil or pure English — always mix both naturally. ' +
+            'Examples of Tanglish style:\n' +
+            '  "Seri saar, ungaloda order ID enna?"\n' +
+            '  "Ok, naan check pannuren, oru minute wait pannunga."\n' +
+            '  "Sorry saar, system-la details match aagala."\n' +
+            '  "Delivery Tuesday-la vanthidum, tension vendam!"\n' +
+            'Keep responses short — 1-2 sentences max. Voice conversation only, no bullet points.\n' +
+            'CALL ENDING RULES:\n' +
+            '- If the user says bye/goodbye/end call/hang up/cut the call or anything indicating they want to end, ' +
+            'ALWAYS ask for confirmation first like "Seri, call end pannalama? Confirm pannunga."\n' +
+            '- Only after the user explicitly confirms (yes/ok/seri/aamaa/end it), say your final goodbye and include the exact token [END_CALL] at the very end of your response.\n' +
+            '- If the user says no/not yet/wait, continue the conversation normally.\n' +
+            '- NEVER include [END_CALL] unless the user has confirmed they want to end.' +
+            (agent.system_prompt ? '\n\n' + agent.system_prompt : '') +
+            kbBlock;
+
+        this._send({
+            setup: {
+                model: MODEL,
+                generationConfig: {
+                    responseModalities: ['AUDIO'],
+                    speechConfig: {
+                        voiceConfig: {
+                            prebuiltVoiceConfig: { voiceName: agent.voice_id || 'Puck' }
+                        }
+                    },
+                    thinkingConfig: { includeThoughts: false },
+                },
+                systemInstruction: { parts: [{ text: sys }] },
+                inputAudioTranscription: {},
+                outputAudioTranscription: {},
+            }
+        });
+
+        console.log('[Widget] Setup sent — model:', MODEL, ', voice:', agent.voice_id);
     };
 
-    LiveAudioService.prototype.disconnect = function () {
-        this.connected = false;
-        if (this.processor) { this.processor.disconnect(); this.processor = null; }
-        if (this.source) { this.source.disconnect(); this.source = null; }
-        if (this.mediaStream) { this.mediaStream.getTracks().forEach(function (t) { t.stop(); }); this.mediaStream = null; }
-        if (this.audioContext) { this.audioContext.close().catch(function () { }); this.audioContext = null; }
-        if (this.session) { try { this.session.close(); } catch (_) { } this.session = null; }
-        this.nextPlayTime = 0;
-        this.isMuted = false;
-        console.log('[LiveAudio] Disconnected');
+    WidgetLiveService.prototype._greet = function () {
+        this._send({
+            clientContent: {
+                turns: [{
+                    role: 'user',
+                    parts: [{
+                        text: 'Greet me warmly in Tanglish, say your name and role, ask how you can help. Max 2 sentences.'
+                    }]
+                }],
+                turnComplete: true,
+            }
+        });
+    };
+
+    WidgetLiveService.prototype._handleContent = function (msg) {
+        var sc = msg.serverContent || msg.server_content;
+        if (!sc) return;
+
+        // Interrupted
+        if (sc.interrupted) {
+            this._playing = false;
+            this._turnInterrupted = false;
+            this._player.stop();
+            this._emit('onInterrupted');
+            return;
+        }
+
+        // Model audio output
+        var parts = (sc.modelTurn && sc.modelTurn.parts) || (sc.model_turn && sc.model_turn.parts) || [];
+        for (var i = 0; i < parts.length; i++) {
+            var d = parts[i].inlineData || parts[i].inline_data;
+            var mime = (d && (d.mimeType || d.mime_type)) || '';
+            if (mime.indexOf('audio/pcm') === 0) {
+                if (this._turnInterrupted) continue;
+                this._playing = true;
+                this._player.play(fromB64(d.data));
+            }
+        }
+
+        // Turn complete
+        if (sc.turnComplete || sc.turn_complete) {
+            this._playing = false;
+            this._turnInterrupted = false;
+            this._emit('onTurnComplete');
+        }
+
+        // Input transcription (user speech → text)
+        var itx = sc.inputTranscription || sc.input_transcription;
+        if (itx && itx.text) this._emit('onTranscription', itx.text, true);
+
+        // Output transcription (agent speech → text)
+        var otx = sc.outputTranscription || sc.output_transcription;
+        if (otx && otx.text) {
+            this._emit('onTranscription', otx.text, false);
+            if (otx.text.indexOf('[END_CALL]') >= 0) {
+                console.log('[Widget] Agent confirmed call end');
+                this._emit('onCallEnd');
+            }
+        }
+    };
+
+    // ── Mic (ScriptProcessorNode — works on all origins incl. file://) ─
+
+    WidgetLiveService.prototype._startMic = async function () {
+        this._stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                channelCount: 1,
+                sampleRate: MIC_RATE,
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+            }
+        });
+
+        var C = window.AudioContext || window.webkitAudioContext;
+        this._micCtx = new C({ sampleRate: MIC_RATE });
+        if (this._micCtx.state === 'suspended') await this._micCtx.resume();
+
+        var src = this._micCtx.createMediaStreamSource(this._stream);
+        this._processor = this._micCtx.createScriptProcessor(4096, 1, 1);
+
+        var self = this;
+        this._processor.onaudioprocess = function (e) {
+            if (!self._live || self._muted || !self._ws || self._ws.readyState !== WebSocket.OPEN) return;
+
+            var inputData = e.inputBuffer.getChannelData(0);
+            var chunk = new Uint8Array(f32ToI16(inputData).buffer);
+            self._send({
+                realtimeInput: {
+                    mediaChunks: [{ mimeType: 'audio/pcm;rate=' + MIC_RATE, data: toB64(chunk) }]
+                }
+            });
+        };
+
+        src.connect(this._processor);
+        this._processor.connect(this._micCtx.destination);
+
+        // Keepalive: send silent chunk every 8s to prevent WS timeout
+        this._keepalive = setInterval(function () {
+            if (!self._live || !self._ws || self._ws.readyState !== WebSocket.OPEN) return;
+            if (self._micCtx && self._micCtx.state === 'suspended') self._micCtx.resume();
+            var silence = new Uint8Array(256);
+            self._send({
+                realtimeInput: {
+                    mediaChunks: [{ mimeType: 'audio/pcm;rate=' + MIC_RATE, data: toB64(silence) }]
+                }
+            });
+        }, 8000);
+
+        console.log('[Widget] Mic started (ScriptProcessor)');
+    };
+
+    WidgetLiveService.prototype._stopMic = function () {
+        if (this._keepalive) { clearInterval(this._keepalive); this._keepalive = null; }
+        if (this._processor) { try { this._processor.disconnect(); } catch (_) { } this._processor = null; }
+        if (this._stream) { this._stream.getTracks().forEach(function (t) { t.stop(); }); this._stream = null; }
+    };
+
+    // ── Public API ───────────────────────────────────────────────────
+
+    WidgetLiveService.prototype.disconnect = function () {
+        this._stop = true;
+        this._live = false;
+        this._stopMic();
+        this._player.close();
+        if (this._micCtx) { try { this._micCtx.close(); } catch (_) { } this._micCtx = null; }
+        if (this._ws) { try { this._ws.close(1000, 'bye'); } catch (_) { } this._ws = null; }
+        this._emit('onClose');
+    };
+
+    WidgetLiveService.prototype.toggleMute = function () {
+        this._muted = !this._muted;
+        return this._muted;
+    };
+
+    WidgetLiveService.prototype.sendText = function (text) {
+        this._send({
+            clientContent: {
+                turns: [{ role: 'user', parts: [{ text: text }] }],
+                turnComplete: true,
+            }
+        });
+    };
+
+    WidgetLiveService.prototype._send = function (obj) {
+        if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+            this._ws.send(JSON.stringify(obj));
+        }
+    };
+
+    WidgetLiveService.prototype._emit = function (ev) {
+        if (typeof this._cbs[ev] === 'function') {
+            var args = Array.prototype.slice.call(arguments, 1);
+            try { this._cbs[ev].apply(null, args); } catch (e) { console.error('[Widget]', e); }
+        }
     };
 
     // ═════════════════════════════════════════════════════════════════
-    // Widget UI — waits for DOM to be ready
+    // Widget UI
     // ═════════════════════════════════════════════════════════════════
     function init() {
         var config = window.AgentWidgetConfig || {};
         var AGENT_ID = config.agentId || '';
-        var SERVER_URL = (config.serverUrl || 'http://localhost:8000').replace(/\/$/, '');
+        var SERVER_URL = (config.serverUrl || '').replace(/\/$/, '');
         var THEME = config.theme || 'dark';
         var POSITION = config.position || 'bottom-right';
         var TITLE = config.title || 'AI Assistant';
         var SUBTITLE = config.subtitle || 'Click to start a voice call';
         var PRIMARY_COLOR = config.primaryColor || '#6C63FF';
 
-        console.log('[AgentWidget] Config:', { AGENT_ID: AGENT_ID, SERVER_URL: SERVER_URL, THEME: THEME });
-
         if (!AGENT_ID) {
             console.error('[AgentWidget] No agentId in AgentWidgetConfig');
             return;
         }
+        if (!SERVER_URL) {
+            console.error('[AgentWidget] No serverUrl in AgentWidgetConfig');
+            return;
+        }
+
+        console.log('[AgentWidget] Initializing —', TITLE, '(', AGENT_ID, ')');
 
         var isDark = THEME === 'dark';
         var C = {
@@ -324,31 +496,31 @@
         // ── Inject styles ────────────────────────────────────
         var styleEl = document.createElement('style');
         styleEl.textContent = '\
-#aw-fab{position:fixed;'+ (posLeft ? 'left:24px' : 'right:24px') + ';bottom:24px;z-index:99999;width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,' + C.primary + ',#00D9FF);border:none;cursor:pointer;box-shadow:0 4px 20px rgba(108,99,255,.4);font-size:28px;display:flex;align-items:center;justify-content:center;transition:all .3s ease}\
+#aw-fab{position:fixed;' + (posLeft ? 'left:24px' : 'right:24px') + ';bottom:24px;z-index:99999;width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,' + C.primary + ',#00D9FF);border:none;cursor:pointer;box-shadow:0 4px 20px rgba(108,99,255,.4);font-size:28px;display:flex;align-items:center;justify-content:center;transition:all .3s ease}\
 #aw-fab:hover{transform:scale(1.1);box-shadow:0 8px 30px rgba(108,99,255,.5)}\
-#aw-panel{position:fixed;'+ (posLeft ? 'left:24px' : 'right:24px') + ';bottom:100px;z-index:99999;width:380px;max-height:540px;background:' + C.bg + ';border:1px solid ' + C.border + ';border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,.4);display:none;flex-direction:column;overflow:hidden;font-family:Inter,-apple-system,sans-serif;color:' + C.text + '}\
+#aw-panel{position:fixed;' + (posLeft ? 'left:24px' : 'right:24px') + ';bottom:100px;z-index:99999;width:380px;max-height:540px;background:' + C.bg + ';border:1px solid ' + C.border + ';border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,.4);display:none;flex-direction:column;overflow:hidden;font-family:Inter,-apple-system,sans-serif;color:' + C.text + '}\
 #aw-panel.open{display:flex;animation:awUp .3s ease}\
 @keyframes awUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}\
-.aw-hdr{padding:16px 20px;background:'+ (isDark ? 'rgba(108,99,255,.05)' : '#FAFAFA') + ';border-bottom:1px solid ' + C.border + ';display:flex;align-items:center;justify-content:space-between}\
+.aw-hdr{padding:16px 20px;background:' + (isDark ? 'rgba(108,99,255,.05)' : '#FAFAFA') + ';border-bottom:1px solid ' + C.border + ';display:flex;align-items:center;justify-content:space-between}\
 .aw-hdr-title{font-size:16px;font-weight:700;margin:0}\
-.aw-hdr-sub{font-size:11px;color:'+ C.textMuted + ';margin:2px 0 0}\
-.aw-close{background:none;border:none;color:'+ C.textMuted + ';font-size:20px;cursor:pointer;padding:4px}\
+.aw-hdr-sub{font-size:11px;color:' + C.textMuted + ';margin:2px 0 0}\
+.aw-close{background:none;border:none;color:' + C.textMuted + ';font-size:20px;cursor:pointer;padding:4px}\
 .aw-msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;min-height:200px;max-height:300px}\
 .aw-msg{padding:10px 14px;border-radius:14px;font-size:13px;line-height:1.5;max-width:85%;word-break:break-word}\
-.aw-msg-user{align-self:flex-end;background:'+ C.userMsg + ';color:' + (isDark ? 'white' : '#333') + ';border-bottom-right-radius:4px}\
-.aw-msg-agent{align-self:flex-start;background:'+ C.agentMsg + ';border:1px solid ' + C.border + ';border-bottom-left-radius:4px}\
-.aw-msg-system{align-self:center;background:transparent;color:'+ C.textMuted + ';font-size:11px;text-align:center}\
-.aw-status{text-align:center;font-size:12px;color:'+ C.textMuted + ';padding:4px}\
-.aw-controls{padding:16px;display:flex;align-items:center;justify-content:center;gap:16px;border-top:1px solid '+ C.border + '}\
-.aw-mic{width:56px;height:56px;border-radius:50%;border:none;background:linear-gradient(135deg,'+ C.primary + ',#00D9FF);color:white;font-size:24px;cursor:pointer;transition:all .3s;box-shadow:0 4px 15px rgba(108,99,255,.3)}\
+.aw-msg-user{align-self:flex-end;background:' + C.userMsg + ';color:' + (isDark ? 'white' : '#333') + ';border-bottom-right-radius:4px}\
+.aw-msg-agent{align-self:flex-start;background:' + C.agentMsg + ';border:1px solid ' + C.border + ';border-bottom-left-radius:4px}\
+.aw-msg-system{align-self:center;background:transparent;color:' + C.textMuted + ';font-size:11px;text-align:center}\
+.aw-status{text-align:center;font-size:12px;color:' + C.textMuted + ';padding:4px}\
+.aw-controls{padding:16px;display:flex;align-items:center;justify-content:center;gap:16px;border-top:1px solid ' + C.border + '}\
+.aw-mic{width:56px;height:56px;border-radius:50%;border:none;background:linear-gradient(135deg,' + C.primary + ',#00D9FF);color:white;font-size:24px;cursor:pointer;transition:all .3s;box-shadow:0 4px 15px rgba(108,99,255,.3)}\
 .aw-mic:hover{transform:scale(1.05)}\
-.aw-mic.live{background:'+ C.danger + ';box-shadow:0 4px 15px rgba(239,68,68,.4);animation:awPulse 1.2s ease infinite}\
+.aw-mic.live{background:' + C.danger + ';box-shadow:0 4px 15px rgba(239,68,68,.4);animation:awPulse 1.2s ease infinite}\
 @keyframes awPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.05)}}\
-.aw-mute{width:40px;height:40px;border-radius:50%;border:1px solid '+ C.border + ';background:rgba(108,99,255,.15);color:' + C.text + ';font-size:18px;cursor:pointer;transition:all .3s;display:none;align-items:center;justify-content:center}\
-.aw-mute.active{background:rgba(239,68,68,.25);border-color:'+ C.danger + '}\
+.aw-mute{width:40px;height:40px;border-radius:50%;border:1px solid ' + C.border + ';background:rgba(108,99,255,.15);color:' + C.text + ';font-size:18px;cursor:pointer;transition:all .3s;display:none;align-items:center;justify-content:center}\
+.aw-mute.active{background:rgba(239,68,68,.25);border-color:' + C.danger + '}\
 .aw-input-row{display:flex;gap:8px;padding:0 16px 12px}\
-.aw-input-row input{flex:1;padding:8px 12px;background:'+ C.bgSec + ';border:1px solid ' + C.border + ';border-radius:10px;color:' + C.text + ';font-size:13px;outline:none;font-family:inherit}\
-.aw-input-row button{padding:8px 14px;background:'+ C.primary + ';border:none;border-radius:10px;color:white;font-size:12px;font-weight:600;cursor:pointer}\
+.aw-input-row input{flex:1;padding:8px 12px;background:' + C.bgSec + ';border:1px solid ' + C.border + ';border-radius:10px;color:' + C.text + ';font-size:13px;outline:none;font-family:inherit}\
+.aw-input-row button{padding:8px 14px;background:' + C.primary + ';border:none;border-radius:10px;color:white;font-size:12px;font-weight:600;cursor:pointer}\
 ';
         document.head.appendChild(styleEl);
 
@@ -361,7 +533,19 @@
 
         var panel = document.createElement('div');
         panel.id = 'aw-panel';
-        panel.innerHTML = '<div class="aw-hdr"><div><div class="aw-hdr-title">' + TITLE + '</div><div class="aw-hdr-sub">' + SUBTITLE + '</div></div><button class="aw-close" id="aw-close-btn">\u2715</button></div><div class="aw-msgs" id="aw-msgs"></div><div class="aw-status" id="aw-status">Click the mic to start a live voice call</div><div class="aw-controls"><button class="aw-mute" id="aw-mute-btn" title="Mute/Unmute">🎤</button><button class="aw-mic" id="aw-mic-btn">📞</button></div><div class="aw-input-row"><input type="text" id="aw-text-input" placeholder="Or type a message..." /><button id="aw-text-send">Send</button></div>';
+        panel.innerHTML =
+            '<div class="aw-hdr"><div><div class="aw-hdr-title">' + TITLE + '</div>' +
+            '<div class="aw-hdr-sub">' + SUBTITLE + '</div></div>' +
+            '<button class="aw-close" id="aw-close-btn">\u2715</button></div>' +
+            '<div class="aw-msgs" id="aw-msgs"></div>' +
+            '<div class="aw-status" id="aw-status">Click the mic to start a live voice call</div>' +
+            '<div class="aw-controls">' +
+            '<button class="aw-mute" id="aw-mute-btn" title="Mute/Unmute">🎤</button>' +
+            '<button class="aw-mic" id="aw-mic-btn">📞</button>' +
+            '</div>' +
+            '<div class="aw-input-row">' +
+            '<input type="text" id="aw-text-input" placeholder="Or type a message..." />' +
+            '<button id="aw-text-send">Send</button></div>';
         document.body.appendChild(panel);
 
         var msgsEl = document.getElementById('aw-msgs');
@@ -376,27 +560,8 @@
         var liveService = null;
         var isConnected = false;
         var isConnecting = false;
-        var agentConfig = null;
         var userT = '', agentT = '';
-        var sdkLoaded = false;
-        var GoogleGenAI = null, Modality = null;
-
-        // ── Load SDK from CDN ────────────────────────────────
-        async function ensureSDK() {
-            if (sdkLoaded) return true;
-            try {
-                console.log('[AgentWidget] Loading @google/genai SDK from CDN...');
-                var mod = await import('https://esm.run/@google/genai');
-                GoogleGenAI = mod.GoogleGenAI;
-                Modality = mod.Modality;
-                sdkLoaded = true;
-                console.log('[AgentWidget] ✅ SDK loaded from CDN');
-                return true;
-            } catch (err) {
-                console.error('[AgentWidget] Failed to load SDK from CDN:', err);
-                return false;
-            }
-        }
+        var chatHistory = [];
 
         // ── Events ───────────────────────────────────────────
         fab.addEventListener('click', function () {
@@ -433,14 +598,6 @@
             }
         }
 
-        function fetchAgentConfig() {
-            return fetch(SERVER_URL + '/api/agents/' + AGENT_ID)
-                .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
-                .catch(function () {
-                    return { name: TITLE, role: 'Assistant', system_prompt: '', voice_id: 'Puck' };
-                });
-        }
-
         // ── Core: Toggle Call ────────────────────────────────
         function toggleCall() {
             if (isConnected) { endCall(); return; }
@@ -451,25 +608,11 @@
         async function startCall() {
             isConnecting = true;
             micBtn.innerHTML = '⏳';
-            statusEl.textContent = 'Loading SDK...';
+            statusEl.textContent = 'Connecting to AI agent...';
 
-            // Load SDK if not loaded yet
-            var loaded = await ensureSDK();
-            if (!loaded) {
-                isConnecting = false;
-                micBtn.innerHTML = '📞';
-                statusEl.textContent = '⚠️ Failed to load AI SDK. Check internet.';
-                addMsg('system', '⚠️ Failed to load Google AI SDK from CDN');
-                return;
-            }
+            liveService = new WidgetLiveService();
 
-            statusEl.textContent = 'Connecting to AI...';
-
-            if (!agentConfig) agentConfig = await fetchAgentConfig();
-
-            liveService = new LiveAudioService(GoogleGenAI, Modality);
-
-            var ok = await liveService.connect(agentConfig, {
+            var ok = await liveService.connect(SERVER_URL, AGENT_ID, {
                 onOpen: function () {
                     isConnected = true;
                     isConnecting = false;
@@ -477,8 +620,9 @@
                     micBtn.classList.add('live');
                     muteBtn.style.display = 'flex';
                     statusEl.textContent = '🟢 Live — Speak naturally, AI is listening';
-                    addMsg('system', 'Connected to ' + (agentConfig.name || TITLE) + '. Start speaking!');
-                    userT = ''; agentT = '';
+                    addMsg('system', 'Connected! Start speaking.');
+                    userT = '';
+                    agentT = '';
                 },
                 onClose: function () {
                     isConnected = false;
@@ -506,6 +650,14 @@
                 onInterrupted: function () {
                     statusEl.textContent = '⚡ Interrupted — listening to you...';
                 },
+                onTurnComplete: function () {
+                    statusEl.textContent = '🟢 Listening...';
+                },
+                onCallEnd: function () {
+                    setTimeout(function () {
+                        if (liveService) { liveService.disconnect(); liveService = null; }
+                    }, 2000);
+                },
                 onTranscription: function (text, isUser) {
                     if (!text || !text.trim()) return;
                     if (isUser) {
@@ -514,8 +666,10 @@
                         agentT = '';
                         statusEl.textContent = '🟢 Listening...';
                     } else {
-                        if (agentT === '') { agentT = text; addMsg('agent', text); }
-                        else { agentT += text; updateLastMsg('agent', agentT); }
+                        var clean = text.replace('[END_CALL]', '').trim();
+                        if (!clean) return;
+                        if (agentT === '') { agentT = clean; addMsg('agent', clean); }
+                        else { agentT += clean; updateLastMsg('agent', agentT); }
                         userT = '';
                         statusEl.textContent = '🗣️ Agent speaking...';
                     }
@@ -550,16 +704,21 @@
             statusEl.textContent = 'Thinking...';
 
             if (isConnected && liveService) {
+                // Send through live session
                 liveService.sendText(text);
             } else {
+                // REST fallback — public widget chat endpoint
+                chatHistory.push({ role: 'user', content: text });
                 try {
-                    var r = await fetch(SERVER_URL + '/api/agents/' + AGENT_ID + '/chat', {
+                    var r = await fetch(SERVER_URL + '/api/widget/' + AGENT_ID + '/chat', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: text }),
+                        body: JSON.stringify({ message: text, history: chatHistory }),
                     });
                     var d = await r.json();
-                    addMsg('agent', d.response);
+                    var reply = d.response || 'No response';
+                    addMsg('agent', reply);
+                    chatHistory.push({ role: 'assistant', content: reply });
                     statusEl.textContent = 'Agent responded';
                 } catch (err) {
                     addMsg('system', '⚠️ ' + err.message);
@@ -568,10 +727,10 @@
             }
         }
 
-        console.log('[AgentWidget] 🎉 Widget initialized! Ready for Live API voice calls.');
-    } // end init()
+        console.log('[AgentWidget] ✅ Widget ready! Agent:', TITLE);
+    }
 
-    // Run init when DOM is ready (works when script is in <head> or <body>)
+    // Run init when DOM is ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {

@@ -570,13 +570,35 @@ async def upload_file(
     db: Session = Depends(get_db),
     company: Company = Depends(get_current_company),
 ):
+    from services.security_guard import validate_upload, scan_kb_content, sanitize_kb_content, upload_limiter
+
     kb = _assert_kb_owned(kb_id, company.id, db)
+
+    # Rate limit uploads per company
+    if not upload_limiter.is_allowed(company.id):
+        raise HTTPException(status_code=429, detail="Upload rate limit exceeded. Please wait.")
+
     contents = await file.read()
+
+    # Validate file size and extension
+    is_valid, err = validate_upload(file.filename or "unknown", contents)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=err)
+
     chunks = process_file(contents, file.filename)
     if not chunks:
         raise HTTPException(status_code=400, detail="Could not extract content from file")
 
     all_text = "\n\n".join([c["content"] for c in chunks])
+
+    # Scan for data poisoning
+    is_poisoned, _ = scan_kb_content(all_text)
+    if is_poisoned:
+        raise HTTPException(status_code=400, detail="File content blocked by security filter")
+
+    # Sanitize injection markers
+    all_text = sanitize_kb_content(all_text)
+
     stored = await embed_and_store_chunked(
         text=all_text, kb_id=kb_id, source=file.filename, db=db, agent_id=kb.agent_id,
     )
@@ -589,9 +611,19 @@ async def add_manual_entry(
     db: Session = Depends(get_db),
     company: Company = Depends(get_current_company),
 ):
+    from services.security_guard import scan_kb_content, sanitize_kb_content
+
     kb = _assert_kb_owned(kb_id, company.id, db)
+
+    # Scan for data poisoning
+    is_poisoned, _ = scan_kb_content(entry.content)
+    if is_poisoned:
+        raise HTTPException(status_code=400, detail="Content blocked by security filter")
+
+    clean_content = sanitize_kb_content(entry.content)
+
     db_entry = await embed_and_store(
-        content=entry.content, kb_id=kb_id,
+        content=clean_content, kb_id=kb_id,
         source=entry.source_file or "manual", chunk_index=0, db=db
     )
     # Mirror to ChromaDB when active

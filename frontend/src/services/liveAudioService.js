@@ -875,8 +875,10 @@ export class LiveAudioService {
         this._playing = false;
         this._cbs     = {};
         this._cfg     = null;
-        // Speaker voice lock (MFCC-based speaker verification)
+        // Speaker voice lock (disabled for now)
         this._voiceLock = null;
+        // Prevent _playing from being re-set after client-side interrupt
+        this._turnInterrupted = false;
     }
 
     async connect(agentConfig, callbacks) {
@@ -886,17 +888,10 @@ export class LiveAudioService {
         this._live = false;
         this._playing = false;
         this._kbContext = '';
+        this._turnInterrupted = false;
 
-        // Initialize speaker voice lock with callbacks
-        this._voiceLock = new SpeakerVoiceLock({
-            onStateChange: (newState) => {
-                console.log(`[VL] → ${newState}`);
-                this._emit('onVoiceLockState', newState);
-            },
-            onVoiceLockEvent: (event, data) => {
-                this._emit('onVoiceLockEvent', event, data);
-            },
-        });
+        // Voice lock disabled for now — will revisit later
+        this._voiceLock = null;
 
         try {
             // 1. Prime the player AudioContext during user-gesture
@@ -1011,7 +1006,7 @@ export class LiveAudioService {
         const { name, role, system_prompt, voice_id } = this._cfg || {};
         const kbContext = this._kbContext || '';
         const kbBlock = kbContext
-            ? `\n\nKNOWLEDGE BASE (ONLY use this information to answer questions — NEVER make up information not listed here):\n${kbContext}\n\nIf the user asks something not covered above, say "Sorry, en kitta antha information illa" in Tanglish.`
+            ? `\n\nKNOWLEDGE BASE (ONLY use this information to answer questions — NEVER make up information not listed here):\n${kbContext}\n\nCRITICAL RESPONSE RULES FOR KNOWLEDGE BASE:\n- If the KB context starts with "[KB INFO: ...]", it tells you how many total entries exist vs what you see. You are seeing only a SMALL SUBSET.\n- BROAD QUERIES ("list all products", "what do you have", "tell me everything", "onnonu solu", "ellam solu"):\n  * NEVER list every item one-by-one. This is a voice call — long lists are terrible UX.\n  * Instead: mention the CATEGORIES you see (e.g. Smartphones, Laptops, Headphones, Tablets, Smartwatches) and say how many total products you have.\n  * Then ASK the user which category interests them: "Enga kitta [total] products irukku — Smartphones, Laptops, Headphones, Tablets mathiri categories la. Etha category pathi theriyanum?"\n  * Keep it to 2-3 sentences MAX.\n- SPECIFIC QUERIES ("tell me about iPhone 15", "Samsung price enna"): give full details from context.\n- If the user asks something not covered, say "Sorry, en kitta antha information illa" in Tanglish.`
             : '';
         const sys =
             `You are ${name||'AI'}, a ${role||'assistant'}. ` +
@@ -1076,6 +1071,7 @@ export class LiveAudioService {
 
         if (sc.interrupted) {
             this._playing = false;
+            this._turnInterrupted = false;
             this._player.stop();
             this._emit('onInterrupted');
             return;
@@ -1086,6 +1082,9 @@ export class LiveAudioService {
             const d = p.inlineData || p.inline_data;
             const mime = d?.mimeType || d?.mime_type || '';
             if (mime.startsWith('audio/pcm')) {
+                // If client-side interrupt was triggered, discard remaining audio
+                // from this turn — server doesn't know we interrupted locally
+                if (this._turnInterrupted) continue;
                 this._playing = true;
                 this._player.play(fromB64(d.data));
             }
@@ -1095,6 +1094,7 @@ export class LiveAudioService {
 
         if (sc.turnComplete || sc.turn_complete) {
             this._playing = false;
+            this._turnInterrupted = false;
             this._emit('onTurnComplete');
         }
 
@@ -1138,21 +1138,9 @@ export class LiveAudioService {
     }
 
     _processAudio(f32) {
-        if (!this._voiceLock) return f32;
-
-        const result = this._voiceLock.process(f32);
-
-        // Handle interruption — if speaker is verified and agent is playing
-        if (this._playing && result.action === 'pass') {
-            const energy = rmsEnergy(f32);
-            if (energy > this._voiceLock.interruptThreshold) {
-                this._playing = false;
-                this._player.stop();
-                this._emit('onInterrupted');
-            }
-        }
-
-        return result.audio;
+        // Voice lock disabled — pass audio straight through.
+        // Gemini's server-side VAD handles turn-taking and interruptions natively.
+        return f32;
     }
 
     // ── Mic ───────────────────────────────────────────────────────────────────
@@ -1179,23 +1167,7 @@ export class LiveAudioService {
             if (this._micCtx?.state === 'suspended') this._micCtx.resume();
             if (!this._live || this._muted || this._ws?.readyState !== WebSocket.OPEN) return;
 
-            // Always run voice lock processing (for calibration / enrollment)
-            const proc = this._processAudio(ev.data);
-
-            // Pre-lock: skip sending to Gemini entirely
-            if (this._voiceLock && this._voiceLock.state !== 'LOCKED') return;
-
-            // While agent is speaking, send silence to Gemini to prevent
-            // echo-triggered server-side VAD interruptions.
-            // Client-side interruption detection in _processAudio handles
-            // genuine user interrupts by flipping _playing off first.
-            let chunk;
-            if (this._playing) {
-                chunk = new Uint8Array(proc.length * 2); // silence
-            } else {
-                chunk = new Uint8Array(f32ToI16(proc).buffer);
-            }
-
+            const chunk = new Uint8Array(f32ToI16(ev.data).buffer);
             this._send({
                 realtimeInput: {
                     mediaChunks: [{ mimeType:`audio/pcm;rate=${MIC_SAMPLE_RATE}`, data:toB64(chunk) }]

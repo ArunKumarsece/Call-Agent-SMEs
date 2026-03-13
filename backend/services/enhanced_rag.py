@@ -570,7 +570,11 @@ async def search_knowledge_base_enhanced(
 
 # ─── Context assembly ─────────────────────────────────────────────────────────
 
-def assemble_context(results: list[dict], max_chars: int = MAX_CONTEXT_CHARS) -> str:
+def assemble_context(
+    results: list[dict],
+    max_chars: int = MAX_CONTEXT_CHARS,
+    total_kb_entries: int | None = None,
+) -> str:
     if not results:
         return ""
 
@@ -594,7 +598,19 @@ def assemble_context(results: list[dict], max_chars: int = MAX_CONTEXT_CHARS) ->
         parts.append(content)
         total += len(content)
 
-    return "\n\n---\n\n".join(parts)
+    context_body = "\n\n---\n\n".join(parts)
+
+    # Prepend metadata so the LLM knows it's seeing a subset
+    shown = len(parts)
+    if total_kb_entries and total_kb_entries > shown:
+        header = (
+            f"[KB INFO: Showing top {shown} relevant results out of "
+            f"{total_kb_entries} total entries in the knowledge base. "
+            f"If the user needs more specific results, ask them to narrow their query.]"
+        )
+        return f"{header}\n\n{context_body}"
+
+    return context_body
 
 
 # ─── Ingestion ────────────────────────────────────────────────────────────────
@@ -649,6 +665,22 @@ async def embed_and_store_chunked(
     return stored
 
 
+# ─── Broad query detection ────────────────────────────────────────────────────
+
+_BROAD_QUERY_PATTERNS = re.compile(
+    r"\b(all|list|show|every|everything|catalog|catalogue|available|"
+    r"what do you have|what(?:'s| is) available|full list|complete list|"
+    r"tell me about your|what products|what items|what services|"
+    r"ellam|muzhusa|total|enna enna|enna irukku|enna vagai"
+    r")\b",
+    re.IGNORECASE,
+)
+
+def _is_broad_query(query: str) -> bool:
+    """Detect if user is asking a broad/listing question vs a specific one."""
+    return bool(_BROAD_QUERY_PATTERNS.search(query))
+
+
 # ─── Unified search dispatcher ────────────────────────────────────────────────
 
 async def search_knowledge_base_unified(
@@ -671,6 +703,11 @@ async def search_knowledge_base_unified(
     logger = logging.getLogger(__name__)
     
     k = top_k or TOP_K
+
+    # Boost retrieval count for broad/listing queries to get more diverse results
+    if _is_broad_query(query):
+        k = max(k, 12)
+        logger.info(f"📋 Broad query detected — boosted top_k to {k}")
 
     logger.info(f"🔍 RAG search: backend={RAG_BACKEND}, agent={agent_id}, query='{query[:50]}...', top_k={k}")
 

@@ -3,66 +3,84 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>AI Voice Agent - Mark</title>
+    <title>AI Voice Agent — Widget Demo</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <!-- Optional: Basic Styling for Demo Page -->
     <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            margin: 0;
-            padding: 0;
-            font-family: Arial, sans-serif;
+            font-family: 'Inter', -apple-system, sans-serif;
             background: linear-gradient(135deg, #0f172a, #1e293b);
             color: white;
+            min-height: 100vh;
             display: flex;
-            justify-content: center;
+            flex-direction: column;
             align-items: center;
-            height: 100vh;
+            justify-content: center;
             text-align: center;
+            padding: 24px;
         }
-
-        .content {
-            max-width: 600px;
+        h1 { font-size: 2.5rem; margin-bottom: 12px; }
+        p { opacity: 0.7; font-size: 1.1rem; max-width: 500px; line-height: 1.6; }
+        .badge {
+            display: inline-block;
+            margin-top: 24px;
+            padding: 6px 16px;
+            background: rgba(108, 99, 255, 0.15);
+            border: 1px solid rgba(108, 99, 255, 0.3);
+            border-radius: 20px;
+            font-size: 0.85rem;
+            color: #a5b4fc;
         }
-
-        h1 {
-            font-size: 2.5rem;
-            margin-bottom: 10px;
+        .instructions {
+            margin-top: 40px;
+            padding: 20px 28px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            text-align: left;
+            max-width: 520px;
+            font-size: 0.9rem;
+            line-height: 1.8;
+            color: rgba(255,255,255,0.7);
         }
-
-        p {
-            opacity: 0.8;
-            font-size: 1.1rem;
+        .instructions strong { color: #a5b4fc; }
+        code {
+            background: rgba(108, 99, 255, 0.15);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.85em;
         }
     </style>
-
 </head>
-<!-- AI Voice Agent Widget — Mark -->
-
 
 <body>
 
-    <div class="content">
-        <h1>Welcome to Our Website</h1>
-        <p>Click the voice agent icon at the bottom right to talk with Mark.</p>
-    </div>
-    <!-- AI Voice Agent Widget — Arun -->
-    <script>
-        window.AgentWidgetConfig = {
-            agentId: "a9127c0b-acce-4f50-b988-5d2a3707a326",
-            serverUrl: "http://localhost:8000",
-            theme: "dark",
-            position: "bottom-right",
-            title: "Arun",
-            subtitle: "Click to start a voice call",
-            primaryColor: "#6C63FF"
-        };
-    </script>
-    <script src="http://localhost:8000/static/widget/agent-widget.js"></script>
-    <!-- AI Voice Agent Widget — Mark -->
-    <!-- AI Voice Agent Widget — Mark -->
-    <!-- AI Voice Agent Widget — Mark -->
+    <h1>Welcome to Our Website</h1>
+    <p>This is an example page with the AI Voice Agent widget embedded. Click the 🎤 button at the bottom-right to talk to the AI agent.</p>
+    <div class="badge">Widget Demo</div>
 
+    <div class="instructions">
+        <strong>How to test:</strong><br>
+        1. Replace the <code>agentId</code> below with your agent's ID<br>
+        2. Replace the <code>serverUrl</code> with your backend URL<br>
+        3. Open this page in a browser<br>
+        4. Click the 🎤 → then 📞 to start a voice call
+    </div>
+
+    <!-- ═══ AI Voice Agent Widget ═══ -->
+  <!-- AI Voice Agent Widget — Mark -->
+<script>
+  window.AgentWidgetConfig = {
+    agentId: "56919600-738d-4fa9-9ac9-fe43b34f5c1e",
+    serverUrl: "http://localhost:8000",
+    theme: "dark",
+    position: "bottom-right",
+    title: "Mark",
+    subtitle: "Click to start a voice call",
+    primaryColor: "#6C63FF"
+  };
+</script>
+<script src="http://localhost:8000/static/widget/agent-widget.js"></script>
 
 </body>
 

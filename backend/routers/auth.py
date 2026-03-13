@@ -257,6 +257,7 @@ from services.auth_service import (
     store_refresh_token, validate_refresh_token, revoke_refresh_token,
     get_current_company, REFRESH_COOKIE, REFRESH_EXPIRE_DAYS
 )
+from services.security_guard import login_limiter
 from datetime import timedelta
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -298,8 +299,13 @@ async def register(body: CompanyRegister, response: Response, db: Session = Depe
 # ─── Login ────────────────────────────────────────────────────────────────────
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: CompanyLogin, response: Response, db: Session = Depends(get_db)):
+async def login(body: CompanyLogin, request: Request, response: Response, db: Session = Depends(get_db)):
     """Login with company email + password."""
+    # Rate limit by IP
+    client_ip = request.client.host if request.client else "unknown"
+    if not login_limiter.is_allowed(client_ip):
+        raise HTTPException(status_code=429, detail="Too many login attempts. Please wait.")
+
     company = db.query(Company).filter(
         Company.email == body.email.lower(),
         Company.is_active == True

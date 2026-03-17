@@ -6,9 +6,12 @@ __pycache__/
 dist/
 uploads/
 agents.db
+
 # Environment
+# Ignore .env file but NOT .env.example (template)
 .env
-.env.*
+.env.local
+.env.*.local
 
 # Python
 __pycache__/

@@ -50,7 +50,11 @@ import { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { setTokenGetter } from './api';
+import Sidebar from './components/Sidebar';
 import Dashboard    from './pages/Dashboard';
+import Analytics    from './pages/Analytics';
+import CallHistory  from './pages/CallHistory';
+import Billing      from './pages/Billing';
 import CreateAgent  from './pages/CreateAgent';
 import AgentDetail  from './pages/AgentDetail';
 import EditAgent    from './pages/EditAgent';
@@ -86,22 +90,18 @@ function Navbar() {
 
     const PLAN_BADGE = { free: '#94a3b8', pro: '#6c63ff', enterprise: '#f59e0b' };
 
+    let pageTitle = 'Dashboard';
+    if (location.pathname.startsWith('/agents/new')) pageTitle = 'Create Agent';
+    else if (location.pathname.startsWith('/agents/') && location.pathname.endsWith('/edit')) pageTitle = 'Edit Agent';
+    else if (location.pathname.startsWith('/agents/')) pageTitle = 'Agent Detail';
+    else if (location.pathname.startsWith('/analytics')) pageTitle = 'Analytics';
+    else if (location.pathname.startsWith('/calls')) pageTitle = 'Call History';
+    else if (location.pathname.startsWith('/billing')) pageTitle = 'Billing';
+    else if (location.pathname.startsWith('/settings')) pageTitle = 'Settings';
+
     return (
         <nav className="navbar">
-            <Link to="/" className="navbar-brand">
-                <span className="brand-icon"></span>
-                VoiceForge AI
-            </Link>
-
-            <div className="navbar-links">
-                <Link to="/" className={location.pathname === '/' ? 'active' : ''}>Dashboard</Link>
-                <Link to="/agents/new" className={location.pathname === '/agents/new' ? 'active' : ''}>
-                    Create Agent
-                </Link>
-                <Link to="/settings" className={location.pathname === '/settings' ? 'active' : ''}>
-                    Settings
-                </Link>
-            </div>
+            <div className="navbar-title">{pageTitle}</div>
 
             {/* Company pill */}
             <div className="navbar-actions">
@@ -132,25 +132,31 @@ function Navbar() {
 function AppRoutes() {
     const { company } = useAuth();
     return (
-        <div className="app-layout">
-            <Navbar />
-            <main className="app-content">
-                <Routes>
-                    {/* Public routes */}
-                    <Route path="/login"    element={company ? <Navigate to="/" replace /> : <Login />} />
-                    <Route path="/register" element={company ? <Navigate to="/" replace /> : <Register />} />
+        <div className="app-shell">
+            <Sidebar />
+            <div className="app-main">
+                <Navbar />
+                <main className="app-content">
+                    <Routes>
+                        {/* Public routes */}
+                        <Route path="/login"    element={company ? <Navigate to="/" replace /> : <Login />} />
+                        <Route path="/register" element={company ? <Navigate to="/" replace /> : <Register />} />
 
-                    {/* Protected routes */}
-                    <Route path="/"                  element={<PrivateRoute><Dashboard /></PrivateRoute>} />
-                    <Route path="/agents/new"        element={<PrivateRoute><CreateAgent /></PrivateRoute>} />
-                    <Route path="/agents/:id"        element={<PrivateRoute><AgentDetail /></PrivateRoute>} />
-                    <Route path="/agents/:id/edit"   element={<PrivateRoute><EditAgent /></PrivateRoute>} />
-                    <Route path="/settings"          element={<PrivateRoute><Settings /></PrivateRoute>} />
+                        {/* Protected routes */}
+                        <Route path="/"                  element={<PrivateRoute><Dashboard /></PrivateRoute>} />
+                        <Route path="/analytics"          element={<PrivateRoute><Analytics /></PrivateRoute>} />
+                        <Route path="/calls"              element={<PrivateRoute><CallHistory /></PrivateRoute>} />
+                        <Route path="/billing"            element={<PrivateRoute><Billing /></PrivateRoute>} />
+                        <Route path="/agents/new"        element={<PrivateRoute><CreateAgent /></PrivateRoute>} />
+                        <Route path="/agents/:id"        element={<PrivateRoute><AgentDetail /></PrivateRoute>} />
+                        <Route path="/agents/:id/edit"   element={<PrivateRoute><EditAgent /></PrivateRoute>} />
+                        <Route path="/settings"          element={<PrivateRoute><Settings /></PrivateRoute>} />
 
-                    {/* Fallback */}
-                    <Route path="*" element={<Navigate to={company ? '/' : '/login'} replace />} />
-                </Routes>
-            </main>
+                        {/* Fallback */}
+                        <Route path="*" element={<Navigate to={company ? '/' : '/login'} replace />} />
+                    </Routes>
+                </main>
+            </div>
         </div>
     );
 }

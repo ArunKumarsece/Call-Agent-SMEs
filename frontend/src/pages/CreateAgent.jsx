@@ -7,12 +7,16 @@ Answer questions based on the knowledge base provided.
 Be friendly, professional, and concise.
 If you don't know something, honestly say so and offer to help find the answer.`;
 
+const PERSONA_HEADER = '--- Persona Profile ---';
+const PERSONA_FOOTER = '--- End Persona ---';
+
 export default function CreateAgent() {
     const navigate = useNavigate();
     const [step, setStep] = useState(1);
     const [voices, setVoices] = useState([]);
     const [loading, setLoading] = useState(false);
     const [toast, setToast] = useState(null);
+    const [personaEnabled, setPersonaEnabled] = useState(true);
 
     // Agent form state
     const [form, setForm] = useState({
@@ -22,6 +26,17 @@ export default function CreateAgent() {
         system_prompt: DEFAULT_SYSTEM_PROMPT,
         voice_id: 'Puck',
         language: 'tanglish',
+    });
+
+    const [persona, setPersona] = useState({
+        tone: 'friendly',
+        pace: 'normal',
+        empathy: 0.8,
+        humor: 0.3,
+        assertiveness: 0.6,
+        backstory: '',
+        signature_phrases: '',
+        avoid_topics: '',
     });
 
     // KB form state
@@ -60,6 +75,33 @@ export default function CreateAgent() {
         setForm({ ...form, [e.target.name]: e.target.value });
     }
 
+    function handlePersonaChange(e) {
+        const { name, value } = e.target;
+        setPersona({ ...persona, [name]: value });
+    }
+
+    function buildPersonaPrompt(p) {
+        return [
+            PERSONA_HEADER,
+            `Tone: ${p.tone}`,
+            `Speaking pace: ${p.pace}`,
+            `Empathy: ${p.empathy}`,
+            `Humor: ${p.humor}`,
+            `Assertiveness: ${p.assertiveness}`,
+            p.backstory ? `Backstory: ${p.backstory}` : null,
+            p.signature_phrases ? `Signature phrases: ${p.signature_phrases}` : null,
+            p.avoid_topics ? `Avoid topics: ${p.avoid_topics}` : null,
+            PERSONA_FOOTER,
+        ].filter(Boolean).join('\n');
+    }
+
+    function applyPersonaPrompt(basePrompt, personaBlock) {
+        const cleaned = basePrompt
+            .replace(new RegExp(`${PERSONA_HEADER}[\s\S]*?${PERSONA_FOOTER}`, 'g'), '')
+            .trim();
+        return personaBlock ? `${cleaned}\n\n${personaBlock}` : cleaned;
+    }
+
     async function handleSubmit(e) {
         e.preventDefault();
         if (!form.name.trim()) {
@@ -70,7 +112,11 @@ export default function CreateAgent() {
         setLoading(true);
         try {
             // Step 1: Create agent
-            const agent = await agentsAPI.create(form);
+            const personaBlock = personaEnabled ? buildPersonaPrompt(persona) : '';
+            const systemPrompt = personaEnabled
+                ? applyPersonaPrompt(form.system_prompt, personaBlock)
+                : form.system_prompt;
+            const agent = await agentsAPI.create({ ...form, system_prompt: systemPrompt });
             showToast('Agent created!', 'success');
 
             // Step 2: Create knowledge base
@@ -234,6 +280,77 @@ export default function CreateAgent() {
                                 </p>
                             </div>
 
+                            <div className="form-group persona-panel">
+                                <div className="form-row">
+                                    <div>
+                                        <label className="form-label">Persona Builder</label>
+                                        <p className="form-helper">
+                                            Craft a distinct voice and personality for this agent.
+                                        </p>
+                                    </div>
+                                    <label className="switch">
+                                        <input
+                                            className="switch-input"
+                                            type="checkbox"
+                                            checked={personaEnabled}
+                                            onChange={() => setPersonaEnabled(!personaEnabled)}
+                                        />
+                                        <span className="switch-track" />
+                                    </label>
+                                </div>
+
+                                {personaEnabled && (
+                                    <div className="persona-grid">
+                                        <div className="form-group">
+                                            <label className="form-label">Tone</label>
+                                            <select className="form-select" name="tone" value={persona.tone} onChange={handlePersonaChange}>
+                                                <option value="friendly">Friendly</option>
+                                                <option value="professional">Professional</option>
+                                                <option value="casual">Casual</option>
+                                                <option value="formal">Formal</option>
+                                            </select>
+                                        </div>
+                                        <div className="form-group">
+                                            <label className="form-label">Pace</label>
+                                            <select className="form-select" name="pace" value={persona.pace} onChange={handlePersonaChange}>
+                                                <option value="slow">Slow</option>
+                                                <option value="normal">Normal</option>
+                                                <option value="fast">Fast</option>
+                                            </select>
+                                        </div>
+
+                                        <div className="form-group">
+                                            <label className="form-label">Empathy</label>
+                                            <input className="range-input" type="range" min="0" max="1" step="0.1" name="empathy" value={persona.empathy} onChange={handlePersonaChange} />
+                                            <div className="range-label">{persona.empathy}</div>
+                                        </div>
+                                        <div className="form-group">
+                                            <label className="form-label">Humor</label>
+                                            <input className="range-input" type="range" min="0" max="1" step="0.1" name="humor" value={persona.humor} onChange={handlePersonaChange} />
+                                            <div className="range-label">{persona.humor}</div>
+                                        </div>
+                                        <div className="form-group">
+                                            <label className="form-label">Assertiveness</label>
+                                            <input className="range-input" type="range" min="0" max="1" step="0.1" name="assertiveness" value={persona.assertiveness} onChange={handlePersonaChange} />
+                                            <div className="range-label">{persona.assertiveness}</div>
+                                        </div>
+
+                                        <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                                            <label className="form-label">Backstory</label>
+                                            <textarea className="form-textarea" name="backstory" value={persona.backstory} onChange={handlePersonaChange} placeholder="Where was this agent created?" style={{ minHeight: 80 }} />
+                                        </div>
+                                        <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                                            <label className="form-label">Signature Phrases</label>
+                                            <input className="form-input" name="signature_phrases" value={persona.signature_phrases} onChange={handlePersonaChange} placeholder="e.g., 'Absolutely!', 'Let me check that'" />
+                                        </div>
+                                        <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                                            <label className="form-label">Avoid Topics</label>
+                                            <input className="form-input" name="avoid_topics" value={persona.avoid_topics} onChange={handlePersonaChange} placeholder="e.g., competitor names, sensitive pricing" />
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-lg)' }}>
                                 <div className="form-group">
                                     <label className="form-label">Voice</label>
@@ -250,8 +367,11 @@ export default function CreateAgent() {
                                     <label className="form-label">Language</label>
                                     <select className="form-select" name="language" value={form.language} onChange={handleChange}>
                                         <option value="tanglish">Tanglish (Tamil + English)</option>
-                                        <option value="english">English</option>
-                                        <option value="tamil">Tamil</option>
+                                        <option value="hindi_mix">Hinglish (Hindi + English)</option>
+                                        <option value="kannada_mix">Kannada + English</option>
+                                        <option value="telugu_mix">Telugu + English</option>
+                                        <option value="malayalam_mix">Malayalam + English</option>
+                                        <option value="pure_english">Pure English</option>
                                     </select>
                                 </div>
                             </div>

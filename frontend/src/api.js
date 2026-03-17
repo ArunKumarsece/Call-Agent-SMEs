@@ -215,6 +215,23 @@ export const voicesAPI = {
     list: () => request('/voices'),
 };
 
+// ─── Analytics ─────────────────────────────────────────────────────────────
+
+export const analyticsAPI = {
+    dashboard: (days = 30, agentId = null) => {
+        const params = new URLSearchParams({ days: String(days) });
+        if (agentId) params.set('agent_id', agentId);
+        return request(`/analytics/dashboard?${params.toString()}`);
+    },
+    calls: ({ agentId, limit = 20, offset = 0 } = {}) => {
+        const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+        if (agentId) params.set('agent_id', agentId);
+        return request(`/analytics/calls?${params.toString()}`);
+    },
+    getCall: (callId) => request(`/analytics/calls/${callId}`),
+    seedDemo: () => request('/analytics/seed-demo', { method: 'POST' }),
+};
+
 // ─── WebSocket (auth via query param since WS doesn't support headers) ────────
 
 export function createCallWebSocket(agentId) {

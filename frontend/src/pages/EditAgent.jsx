@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { agentsAPI, voicesAPI } from '../api';
 
+const PERSONA_HEADER = '--- Persona Profile ---';
+const PERSONA_FOOTER = '--- End Persona ---';
+
 export default function EditAgent() {
     const { id } = useParams();
     const navigate = useNavigate();
@@ -9,6 +12,7 @@ export default function EditAgent() {
     const [saving, setSaving] = useState(false);
     const [voices, setVoices] = useState([]);
     const [toast, setToast] = useState(null);
+    const [personaEnabled, setPersonaEnabled] = useState(false);
     const [form, setForm] = useState({
         name: '',
         role: '',
@@ -16,6 +20,17 @@ export default function EditAgent() {
         system_prompt: '',
         voice_id: 'Puck',
         language: 'tanglish',
+    });
+
+    const [persona, setPersona] = useState({
+        tone: 'friendly',
+        pace: 'normal',
+        empathy: 0.8,
+        humor: 0.3,
+        assertiveness: 0.6,
+        backstory: '',
+        signature_phrases: '',
+        avoid_topics: '',
     });
 
     useEffect(() => {
@@ -55,6 +70,33 @@ export default function EditAgent() {
         setForm({ ...form, [e.target.name]: e.target.value });
     }
 
+    function handlePersonaChange(e) {
+        const { name, value } = e.target;
+        setPersona({ ...persona, [name]: value });
+    }
+
+    function buildPersonaPrompt(p) {
+        return [
+            PERSONA_HEADER,
+            `Tone: ${p.tone}`,
+            `Speaking pace: ${p.pace}`,
+            `Empathy: ${p.empathy}`,
+            `Humor: ${p.humor}`,
+            `Assertiveness: ${p.assertiveness}`,
+            p.backstory ? `Backstory: ${p.backstory}` : null,
+            p.signature_phrases ? `Signature phrases: ${p.signature_phrases}` : null,
+            p.avoid_topics ? `Avoid topics: ${p.avoid_topics}` : null,
+            PERSONA_FOOTER,
+        ].filter(Boolean).join('\n');
+    }
+
+    function applyPersonaPrompt(basePrompt, personaBlock) {
+        const cleaned = basePrompt
+            .replace(new RegExp(`${PERSONA_HEADER}[\s\S]*?${PERSONA_FOOTER}`, 'g'), '')
+            .trim();
+        return personaBlock ? `${cleaned}\n\n${personaBlock}` : cleaned;
+    }
+
     async function handleSubmit(e) {
         e.preventDefault();
         if (!form.name.trim()) {
@@ -64,7 +106,11 @@ export default function EditAgent() {
 
         setSaving(true);
         try {
-            await agentsAPI.update(id, form);
+            const personaBlock = personaEnabled ? buildPersonaPrompt(persona) : '';
+            const systemPrompt = personaEnabled
+                ? applyPersonaPrompt(form.system_prompt, personaBlock)
+                : form.system_prompt;
+            await agentsAPI.update(id, { ...form, system_prompt: systemPrompt });
             setToast({ message: 'Agent updated!', type: 'success' });
             setTimeout(() => navigate(`/agents/${id}`), 1000);
         } catch (err) {
@@ -128,6 +174,75 @@ export default function EditAgent() {
                         <textarea className="form-textarea" name="system_prompt" value={form.system_prompt} onChange={handleChange} style={{ minHeight: 150 }} />
                     </div>
 
+                    <div className="form-group persona-panel">
+                        <div className="form-row">
+                            <div>
+                                <label className="form-label">Persona Builder</label>
+                                <p className="form-helper">Shape how the agent sounds and behaves.</p>
+                            </div>
+                            <label className="switch">
+                                <input
+                                    className="switch-input"
+                                    type="checkbox"
+                                    checked={personaEnabled}
+                                    onChange={() => setPersonaEnabled(!personaEnabled)}
+                                />
+                                <span className="switch-track" />
+                            </label>
+                        </div>
+
+                        {personaEnabled && (
+                            <div className="persona-grid">
+                                <div className="form-group">
+                                    <label className="form-label">Tone</label>
+                                    <select className="form-select" name="tone" value={persona.tone} onChange={handlePersonaChange}>
+                                        <option value="friendly">Friendly</option>
+                                        <option value="professional">Professional</option>
+                                        <option value="casual">Casual</option>
+                                        <option value="formal">Formal</option>
+                                    </select>
+                                </div>
+                                <div className="form-group">
+                                    <label className="form-label">Pace</label>
+                                    <select className="form-select" name="pace" value={persona.pace} onChange={handlePersonaChange}>
+                                        <option value="slow">Slow</option>
+                                        <option value="normal">Normal</option>
+                                        <option value="fast">Fast</option>
+                                    </select>
+                                </div>
+
+                                <div className="form-group">
+                                    <label className="form-label">Empathy</label>
+                                    <input className="range-input" type="range" min="0" max="1" step="0.1" name="empathy" value={persona.empathy} onChange={handlePersonaChange} />
+                                    <div className="range-label">{persona.empathy}</div>
+                                </div>
+                                <div className="form-group">
+                                    <label className="form-label">Humor</label>
+                                    <input className="range-input" type="range" min="0" max="1" step="0.1" name="humor" value={persona.humor} onChange={handlePersonaChange} />
+                                    <div className="range-label">{persona.humor}</div>
+                                </div>
+                                <div className="form-group">
+                                    <label className="form-label">Assertiveness</label>
+                                    <input className="range-input" type="range" min="0" max="1" step="0.1" name="assertiveness" value={persona.assertiveness} onChange={handlePersonaChange} />
+                                    <div className="range-label">{persona.assertiveness}</div>
+                                </div>
+
+                                <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                                    <label className="form-label">Backstory</label>
+                                    <textarea className="form-textarea" name="backstory" value={persona.backstory} onChange={handlePersonaChange} style={{ minHeight: 80 }} />
+                                </div>
+                                <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                                    <label className="form-label">Signature Phrases</label>
+                                    <input className="form-input" name="signature_phrases" value={persona.signature_phrases} onChange={handlePersonaChange} />
+                                </div>
+                                <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                                    <label className="form-label">Avoid Topics</label>
+                                    <input className="form-input" name="avoid_topics" value={persona.avoid_topics} onChange={handlePersonaChange} />
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-lg)' }}>
                         <div className="form-group">
                             <label className="form-label">Voice</label>
@@ -143,8 +258,11 @@ export default function EditAgent() {
                             <label className="form-label">Language</label>
                             <select className="form-select" name="language" value={form.language} onChange={handleChange}>
                                 <option value="tanglish">Tanglish (Tamil + English)</option>
-                                <option value="english">English</option>
-                                <option value="tamil">Tamil</option>
+                                <option value="hindi_mix">Hinglish (Hindi + English)</option>
+                                <option value="kannada_mix">Kannada + English</option>
+                                <option value="telugu_mix">Telugu + English</option>
+                                <option value="malayalam_mix">Malayalam + English</option>
+                                <option value="pure_english">Pure English</option>
                             </select>
                         </div>
                     </div>

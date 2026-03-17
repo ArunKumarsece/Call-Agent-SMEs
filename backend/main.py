@@ -171,6 +171,7 @@ from database import init_db
 from routers import agents, knowledge_base, voice_call
 from routers.auth import router as auth_router
 from routers.widget import router as widget_router
+from routers.analytics import router as analytics_router
 from services.gemini_service import AVAILABLE_VOICES
 import os
 import logging
@@ -247,6 +248,7 @@ app.include_router(agents.router)
 app.include_router(knowledge_base.router)
 app.include_router(voice_call.router)
 app.include_router(widget_router)
+app.include_router(analytics_router)
 
 
 # ─── Startup ──────────────────────────────────────────────

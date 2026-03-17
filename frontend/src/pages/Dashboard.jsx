@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { agentsAPI } from '../api';
+import { agentsAPI, analyticsAPI } from '../api';
 
 const ROLE_INITIALS = {
     'Customer Support': 'CS',
@@ -178,8 +178,11 @@ export default function Dashboard() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [viewMode, setViewMode] = useState('compact');
+    const [analytics, setAnalytics] = useState(null);
+    const [recentCalls, setRecentCalls] = useState([]);
+    const [analyticsError, setAnalyticsError] = useState(null);
 
-    useEffect(() => { loadAgents(); }, []);
+    useEffect(() => { loadAgents(); loadAnalytics(); }, []);
 
     async function loadAgents() {
         try {
@@ -190,6 +193,27 @@ export default function Dashboard() {
             setError(err.message);
         } finally {
             setLoading(false);
+        }
+    }
+
+    async function loadAnalytics() {
+        try {
+            setAnalyticsError(null);
+            const data = await analyticsAPI.dashboard(30);
+            const calls = await analyticsAPI.calls({ limit: 5 });
+            setAnalytics(data);
+            setRecentCalls(calls);
+        } catch (err) {
+            setAnalyticsError(err.message);
+        }
+    }
+
+    async function seedDemoAnalytics() {
+        try {
+            await analyticsAPI.seedDemo();
+            await loadAnalytics();
+        } catch (err) {
+            setAnalyticsError(err.message);
         }
     }
 
@@ -213,6 +237,10 @@ export default function Dashboard() {
 
     const totalKBs = agents.reduce((sum, a) => sum + (a.kb_count || 0), 0);
     const langCount = new Set(agents.map(a => a.language)).size || 0;
+    const topSentiment = analytics?.sentiment_distribution
+        ? Object.entries(analytics.sentiment_distribution).sort((a, b) => b[1] - a[1])[0]?.[0]
+        : null;
+    const hasAnalytics = analytics && typeof analytics.total_calls === 'number';
 
     return (
         <div className="dashboard-page">
@@ -240,6 +268,9 @@ export default function Dashboard() {
                     { label: 'Total Agents', value: agents.length },
                     { label: 'Languages', value: langCount },
                     { label: 'Knowledge Bases', value: totalKBs },
+                    { label: 'Calls (30d)', value: hasAnalytics ? analytics.total_calls : '—' },
+                    { label: 'Avg Duration', value: hasAnalytics ? `${Math.round(analytics.avg_duration_sec)}s` : '—' },
+                    { label: 'Top Sentiment', value: topSentiment ? topSentiment : '—' },
                 ].map((m, i) => (
                     <div key={m.label} className="metric-card" style={{ animation: `slideUp 0.4s ease-out ${i * 80}ms both` }}>
                         <span className="metric-label">{m.label}</span>
@@ -247,6 +278,20 @@ export default function Dashboard() {
                     </div>
                 ))}
             </div>
+
+            {(analyticsError || (!hasAnalytics && agents.length > 0)) && (
+                <div className="dashboard-alert">
+                    <div>
+                        <div className="dashboard-alert-title">Analytics not available yet</div>
+                        <div className="dashboard-alert-text">
+                            {analyticsError || 'Generate sample data to preview charts and activity.'}
+                        </div>
+                    </div>
+                    <button className="btn btn-secondary btn-sm" onClick={seedDemoAnalytics}>
+                        Generate Demo Data
+                    </button>
+                </div>
+            )}
 
             {error && (
                 <div className="toast toast-error" style={{ position: 'static', marginBottom: 'var(--space-lg)' }}>
@@ -268,12 +313,82 @@ export default function Dashboard() {
                     </Link>
                 </div>
             ) : (
-                <div className={`grid ${viewMode === 'compact' ? 'grid-agents-compact' : 'grid-2'}`}>
-                    {agents.map((agent, index) =>
-                        viewMode === 'compact'
-                            ? <AgentCardCompact key={agent.id} agent={agent} index={index} onDelete={handleDelete} />
-                            : <AgentCardComfortable key={agent.id} agent={agent} index={index} onDelete={handleDelete} />
-                    )}
+                <div className="dashboard-grid">
+                    <div>
+                        <div className={`grid ${viewMode === 'compact' ? 'grid-agents-compact' : 'grid-2'}`}>
+                            {agents.map((agent, index) =>
+                                viewMode === 'compact'
+                                    ? <AgentCardCompact key={agent.id} agent={agent} index={index} onDelete={handleDelete} />
+                                    : <AgentCardComfortable key={agent.id} agent={agent} index={index} onDelete={handleDelete} />
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="dashboard-side">
+                        <div className="card activity-card">
+                            <div className="activity-header">
+                                <div>
+                                    <div className="activity-title">Recent Calls</div>
+                                    <div className="activity-subtitle">Latest conversations across your agents</div>
+                                </div>
+                                <Link to="/calls" className="btn btn-ghost btn-sm">View all</Link>
+                            </div>
+
+                            {recentCalls.length === 0 ? (
+                                <div className="activity-empty">
+                                    No calls yet. Test your agent to see activity here.
+                                </div>
+                            ) : (
+                                <div className="activity-list">
+                                    {recentCalls.map((call) => (
+                                        <div key={call.id} className="activity-item">
+                                            <div>
+                                                <div className="activity-name">{call.agent_name || 'Agent'}</div>
+                                                <div className="activity-meta">
+                                                    {call.intent || 'general'} · {call.sentiment || 'unknown'} · {Math.round(call.duration_sec || 0)}s
+                                                </div>
+                                            </div>
+                                            <span className={`status-pill status-${call.status || 'completed'}`}>{call.status || 'completed'}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="card activity-card">
+                            <div className="activity-header">
+                                <div>
+                                    <div className="activity-title">System Checklist</div>
+                                    <div className="activity-subtitle">Production readiness quick scan</div>
+                                </div>
+                            </div>
+                            <div className="activity-list">
+                                <div className="activity-item">
+                                    <div>
+                                        <div className="activity-name">Voice agents configured</div>
+                                        <div className="activity-meta">{agents.length} active agents</div>
+                                    </div>
+                                    <span className="status-pill status-completed">ready</span>
+                                </div>
+                                <div className="activity-item">
+                                    <div>
+                                        <div className="activity-name">Knowledge bases</div>
+                                        <div className="activity-meta">{totalKBs} documents indexed</div>
+                                    </div>
+                                    <span className="status-pill status-completed">ready</span>
+                                </div>
+                                <div className="activity-item">
+                                    <div>
+                                        <div className="activity-name">Analytics pipeline</div>
+                                        <div className="activity-meta">Call tracking enabled</div>
+                                    </div>
+                                    <span className={`status-pill ${hasAnalytics ? 'status-completed' : 'status-pending'}`}>
+                                        {hasAnalytics ? 'ready' : 'setup'}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>

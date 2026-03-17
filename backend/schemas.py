@@ -268,3 +268,45 @@ class UpdateCompanyProfile(BaseModel):
 class ChangePassword(BaseModel):
     current_password: str = Field(..., max_length=128)
     new_password: str = Field(..., min_length=8, max_length=128)
+
+# ─── Call Session Schemas ─────────────────────────────────
+
+class CallSessionCreate(BaseModel):
+    agent_id: str
+    caller_id: Optional[str] = None
+    transcript: Optional[List[dict]] = None
+    duration_sec: Optional[int] = 0
+    sentiment: Optional[str] = None
+    intent: Optional[str] = None
+    summary: Optional[str] = None
+    status: Optional[str] = "completed"
+
+
+class CallSessionResponse(BaseModel):
+    id: str
+    agent_id: str
+    company_id: str
+    caller_id: Optional[str]
+    status: str
+    sentiment: Optional[str]
+    intent: Optional[str]
+    duration_sec: int
+    transcript: Optional[List[dict]]
+    summary: Optional[str]
+    started_at: datetime
+    ended_at: Optional[datetime]
+    agent_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AnalyticsResponse(BaseModel):
+    total_calls: int
+    total_duration_min: float
+    avg_duration_sec: float
+    sentiment_distribution: dict
+    intent_distribution: dict
+    status_distribution: dict
+    calls_by_day: List[dict]
+    calls_by_agent: List[dict]

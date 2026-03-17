@@ -187,3 +187,25 @@ class KBEntry(Base):
     created_at   = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     knowledge_base = relationship("KnowledgeBase", back_populates="entries")
+
+# ─── CallSession (call history + transcripts) ─────────────────────────────────
+
+class CallSession(Base):
+    __tablename__ = "call_sessions"
+
+    id           = Column(String, primary_key=True, default=generate_uuid)
+    agent_id     = Column(String, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    company_id   = Column(String, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    caller_id    = Column(String(255), nullable=True)
+    status       = Column(String(50), default="completed")  # active | completed | dropped | escalated
+    sentiment    = Column(String(50), nullable=True)         # positive | neutral | negative
+    intent       = Column(String(255), nullable=True)
+    duration_sec = Column(Integer, default=0)
+    transcript   = Column(JSON, nullable=True)               # [{role, text, timestamp}]
+    summary      = Column(Text, nullable=True)
+    started_at   = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    ended_at     = Column(DateTime, nullable=True)
+    created_at   = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    agent        = relationship("Agent")
+    company      = relationship("Company")

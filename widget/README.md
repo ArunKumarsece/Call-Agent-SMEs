@@ -10,15 +10,15 @@ Paste this code just before `</body>` on your website:
 <script>
   window.AgentWidgetConfig = {
     agentId: "YOUR_AGENT_ID",
-    serverUrl: "http://your-server:8000",
-    theme: "dark",          // "dark" or "light"
-    position: "bottom-right", // "bottom-right" or "bottom-left"
+    serverUrl: "https://your-server.com",
+    theme: "dark",
+    position: "bottom-right",
     title: "AI Assistant",
     subtitle: "Click to start a voice call",
     primaryColor: "#6C63FF"
   };
 </script>
-<script src="http://your-server:8000/static/widget/agent-widget.js"></script>
+<script src="https://your-server.com/static/widget/agent-widget.js"></script>
 ```
 
 ### 2. Configuration Options
@@ -27,23 +27,34 @@ Paste this code just before `</body>` on your website:
 |--------|------|---------|-------------|
 | `agentId` | string | **required** | Agent ID from your dashboard |
 | `serverUrl` | string | **required** | Your backend server URL |
-| `theme` | string | `"dark"` | Widget theme |
-| `position` | string | `"bottom-right"` | Widget position |
+| `theme` | string | `"dark"` | Widget theme (`"dark"` / `"light"`) |
+| `position` | string | `"bottom-right"` | Widget position (`"bottom-right"` / `"bottom-left"`) |
 | `title` | string | `"AI Assistant"` | Header title |
 | `subtitle` | string | — | Header subtitle |
-| `primaryColor` | string | `"#6C63FF"` | Accent color |
+| `primaryColor` | string | `"#6C63FF"` | Accent color (hex) |
 
 ### 3. Features
 
-- 🎤 Voice call with AI agent
-- ⌨️ Text chat fallback
-- 🔇 Noise suppression (browser built-in)
+- 🎤 **Live Voice Calls** — Real-time bidirectional audio via Gemini Live API
+- ⌨️ **Text Chat Fallback** — Type messages when voice isn't available
+- 📚 **Knowledge Base** — Agent uses your uploaded KB data to answer questions
+- 🔇 **Mute/Unmute** — Toggle mic during live calls
+- 📞 **Call-End Detection** — Agent confirms before ending calls
 - 🌙 Dark mode / ☀️ Light mode
 - 📱 Responsive design
-- 🔌 WebSocket real-time connection
 
-### 4. Requirements
+### 4. How It Works
+
+1. Widget loads on client's page and renders a floating 🎤 button
+2. User clicks the mic → widget fetches agent config + KB from your backend
+3. Widget connects directly to Gemini Live API via WebSocket
+4. Mic audio streams to Gemini in real-time, agent audio plays back
+5. Transcriptions appear in the chat panel
+6. Text chat available as fallback (uses multi-agent orchestrator on backend)
+
+### 5. Requirements
 
 - Modern browser (Chrome 80+, Firefox 78+, Edge 80+, Safari 14+)
-- HTTPS recommended for microphone access
+- **HTTPS required** for microphone access on production sites
 - Backend server must be accessible from client browser
+- `GEMINI_API_KEY` must be set on the backend

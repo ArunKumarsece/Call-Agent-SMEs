@@ -16,4 +16,14 @@ export default defineConfig({
       },
     },
   },
+  define: {
+    // Make VITE_API_BASE_URL available to the app
+    'process.env.VITE_API_BASE_URL': JSON.stringify(process.env.VITE_API_BASE_URL || ''),
+  },
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
+    minify: 'terser',
+    target: 'ES2020',
+  },
 })

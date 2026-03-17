@@ -121,7 +121,17 @@
  * Handles 401 by attempting a silent token refresh once.
  */
 
-const API_BASE = '/api';
+// Determine API base URL from environment or default
+// For production (Vercel), set VITE_API_BASE_URL env var
+// For development, defaults to /api (uses Vite proxy)
+const getAPIBase = () => {
+    if (typeof process !== 'undefined' && process.env.VITE_API_BASE_URL) {
+        return process.env.VITE_API_BASE_URL;
+    }
+    return '/api';
+};
+
+const API_BASE = getAPIBase();
 
 // Module-level token getter — set by AuthProvider on mount
 let _getToken = () => localStorage.getItem('vf_access_token');
@@ -129,7 +139,8 @@ export function setTokenGetter(fn) { _getToken = fn; }
 
 async function _refreshOnce() {
     try {
-        const res = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' });
+        const refreshUrl = `${API_BASE}/auth/refresh`;
+        const res = await fetch(refreshUrl, { method: 'POST', credentials: 'include' });
         if (!res.ok) return null;
         const data = await res.json();
         localStorage.setItem('vf_access_token', data.access_token);

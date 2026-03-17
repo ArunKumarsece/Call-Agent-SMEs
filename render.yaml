@@ -1,0 +1,47 @@
+services:
+  - type: web
+    name: ai-voice-agent-backend
+    runtime: docker
+    plan: free
+    region: oregon
+    autoDeploy: true
+    
+    # Docker build settings
+    dockerfile: ./backend/Dockerfile
+    dockerContext: ./backend
+    
+    # Port mapping
+    ports:
+      - port: 8000
+        protocol: http
+    
+    # Environment variables - set these in the Render dashboard or via .env file
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: DATABASE_PATH
+        value: /var/data
+      - key: CHROMA_PERSIST_DIR
+        value: /var/data/chroma_db
+      - key: RAG_BACKEND
+        value: chroma
+      - key: ALLOWED_ORIGINS
+        sync: false
+    
+    # Persistent disk for database and vector store
+    disk:
+      name: agent-data
+      mountPath: /var/data
+      sizeGB: 1
+    
+    # Health check
+    healthCheck:
+      path: /api/health
+      initialDelaySeconds: 10
+    
+    # Build command
+    buildCommand: |
+      pip install --upgrade pip setuptools wheel && \
+      pip install --no-cache-dir -r requirements.txt

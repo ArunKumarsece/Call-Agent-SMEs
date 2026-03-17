@@ -190,10 +190,18 @@ app = FastAPI(
 )
 
 # ─── CORS ─────────────────────────────────────────────────
-# Dashboard origins use credentials (cookie-based refresh tokens)
+# Get allowed origins from environment variable
+# Default: localhost for development
+# For production: set ALLOWED_ORIGINS env var (comma-separated)
+DEFAULT_ORIGINS = ["http://localhost:5173", "http://localhost:3000", "http://localhost:4173"]
+allowed_origins_str = os.getenv("ALLOWED_ORIGINS", ",".join(DEFAULT_ORIGINS))
+allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
+
+logger.info(f"CORS allowed origins: {allowed_origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:4173"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

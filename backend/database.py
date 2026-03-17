@@ -38,8 +38,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 import os
 
-DATABASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATABASE_URL = f"sqlite:///{os.path.join(DATABASE_DIR, 'agents.db')}"
+# Allow DATABASE_PATH env var for persistent storage (e.g., on Render disk)
+# Defaults to ./agents.db in project directory
+DATABASE_DIR = os.getenv("DATABASE_PATH", os.path.dirname(os.path.abspath(__file__)))
+os.makedirs(DATABASE_DIR, exist_ok=True)  # Ensure directory exists for persistent disks
+
+DB_FILENAME = os.path.join(DATABASE_DIR, "agents.db")
+DATABASE_URL = f"sqlite:///{DB_FILENAME}"
 
 engine = create_engine(
     DATABASE_URL,

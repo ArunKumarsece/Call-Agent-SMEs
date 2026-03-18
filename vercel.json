@@ -4,6 +4,10 @@
   "framework": "vite",
   "rewrites": [
     {
+      "source": "/api/(.*)",
+      "destination": "https://call-agent-smes.onrender.com/api/$1"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
@@ -17,11 +21,6 @@
     }
   },
   "regions": ["sfo1"],
-  "functions": {
-    "api/**": {
-      "runtime": "python3.11"
-    }
-  },
   "headers": [
     {
       "source": "/static/(.*)",

@@ -11,6 +11,7 @@
   "env": {
     "VITE_API_BASE_URL": "https://call-agent-smes.onrender.com"
   },
+  "envPrefix": "VITE_",
   "git": {
     "deploymentEnabled": {
       "main": true

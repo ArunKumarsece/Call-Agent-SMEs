@@ -124,7 +124,7 @@
 // Determine API base URL from environment or default
 // For production (Vercel), set VITE_API_BASE_URL env var
 // For development, defaults to /api (uses Vite proxy)
-const getAPIBase = () => {
+export const getAPIBase = () => {
     return import.meta.env.VITE_API_BASE_URL || '/api';
 };
 

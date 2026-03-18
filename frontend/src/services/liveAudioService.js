@@ -862,6 +862,7 @@ class Player {
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────
+import { getAPIBase } from '../api';
 export class LiveAudioService {
     constructor() {
         this._ws      = null;
@@ -896,10 +897,11 @@ export class LiveAudioService {
         try {
             // 1. Prime the player AudioContext during user-gesture
             this._player.prime();
+            const API_BASE = getAPIBase();
 
             // 2. Fetch KB context for this agent (so Live Audio has knowledge base data)
             try {
-                const kbRes = await fetch(`/api/agents/${agentConfig.id || ''}/kb-context`, {
+                const kbRes = await fetch(`${API_BASE}/agents/${agentConfig.id || ''}/kb-context`, {
                     headers: { 'Authorization': `Bearer ${localStorage.getItem('vf_access_token') || ''}` }
                 });
                 if (kbRes.ok) {
@@ -912,7 +914,7 @@ export class LiveAudioService {
             }
 
             // 3. Get key
-            const r = await fetch('/api/gemini-key');
+            const r = await fetch(`${API_BASE}/gemini-key`);
             if (!r.ok) throw new Error('Cannot load Gemini key');
             const { key } = await r.json();
 

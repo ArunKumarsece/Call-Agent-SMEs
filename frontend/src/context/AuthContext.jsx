@@ -1,10 +1,12 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { getAPIBase } from '../api';
 
 const AuthContext = createContext(null);
 const TOKEN_KEY   = 'vf_access_token';
 const COMPANY_KEY = 'vf_company';
 
 export function AuthProvider({ children }) {
+    const API_BASE = getAPIBase();
     const [company, setCompany] = useState(() => {
         try { return JSON.parse(localStorage.getItem(COMPANY_KEY)); } catch { return null; }
     });
@@ -24,7 +26,7 @@ export function AuthProvider({ children }) {
         (async () => {
             if (!token) { setLoading(false); return; }
             try {
-                const res = await fetch('/api/auth/me', {
+                const res = await fetch(`${API_BASE}/auth/me`, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 if (res.ok) {
@@ -44,7 +46,7 @@ export function AuthProvider({ children }) {
 
     async function _silentRefresh() {
         try {
-            const res = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' });
+            const res = await fetch(`${API_BASE}/auth/refresh`, { method: 'POST', credentials: 'include' });
             if (!res.ok) return false;
             const data = await res.json();
             setToken(data.access_token);
@@ -54,7 +56,7 @@ export function AuthProvider({ children }) {
     }
 
     const login = useCallback(async (email, password) => {
-        const res = await fetch('/api/auth/login', {
+        const res = await fetch(`${API_BASE}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
@@ -67,7 +69,7 @@ export function AuthProvider({ children }) {
     }, []);
 
     const register = useCallback(async (payload) => {
-        const res = await fetch('/api/auth/register', {
+        const res = await fetch(`${API_BASE}/auth/register`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
@@ -81,7 +83,7 @@ export function AuthProvider({ children }) {
 
     const logout = useCallback(async () => {
         try {
-            await fetch('/api/auth/logout', {
+            await fetch(`${API_BASE}/auth/logout`, {
                 method: 'POST', credentials: 'include',
                 headers: token ? { Authorization: `Bearer ${token}` } : {},
             });

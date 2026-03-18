@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { getAPIBase } from '../api';
 
 export default function Settings() {
     const { company, token, updateCompany, logout } = useAuth();
@@ -21,8 +22,9 @@ export default function Settings() {
 
     async function saveProfile(e) {
         e.preventDefault(); setSaving(true);
+        const API_BASE = getAPIBase();
         try {
-            const res = await fetch('/api/auth/me', {
+            const res = await fetch(`${API_BASE}/auth/me`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                 body: JSON.stringify({ company_name: profile.company_name, logo_url: profile.logo_url || null }),
@@ -38,11 +40,12 @@ export default function Settings() {
 
     async function changePassword(e) {
         e.preventDefault(); setPwError('');
+        const API_BASE = getAPIBase();
         if (pwForm.new_password.length < 8) { setPwError('New password must be at least 8 characters'); return; }
         if (pwForm.new_password !== pwForm.confirm) { setPwError('Passwords do not match'); return; }
         setSaving(true);
         try {
-            const res = await fetch('/api/auth/password', {
+            const res = await fetch(`${API_BASE}/auth/password`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                 body: JSON.stringify({ current_password: pwForm.current_password, new_password: pwForm.new_password }),

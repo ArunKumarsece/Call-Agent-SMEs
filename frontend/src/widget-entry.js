@@ -309,12 +309,13 @@ console.log('[AgentWidget] Loading widget with Live API support...');
 
     async function fetchAgentConfig() {
         try {
-            const res = await fetch(`${SERVER_URL}/api/agents/${AGENT_ID}`);
+            const res = await fetch(`${SERVER_URL}/api/agents/public/${AGENT_ID}`);
             if (!res.ok) throw new Error('Failed to fetch agent config');
             return await res.json();
         } catch (err) {
             console.error('[AgentWidget] Error fetching agent config:', err);
             return {
+                id: AGENT_ID,
                 name: TITLE,
                 role: 'Assistant',
                 system_prompt: '',

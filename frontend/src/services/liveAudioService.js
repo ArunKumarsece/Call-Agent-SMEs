@@ -901,9 +901,7 @@ export class LiveAudioService {
 
             // 2. Fetch KB context for this agent (so Live Audio has knowledge base data)
             try {
-                const kbRes = await fetch(`${API_BASE}/agents/${agentConfig.id || ''}/kb-context`, {
-                    headers: { 'Authorization': `Bearer ${localStorage.getItem('vf_access_token') || ''}` }
-                });
+                const kbRes = await fetch(`${API_BASE}/agents/public/${agentConfig.id || ''}/kb-context`);
                 if (kbRes.ok) {
                     const kbData = await kbRes.json();
                     this._kbContext = kbData.context || '';

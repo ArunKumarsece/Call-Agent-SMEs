@@ -224,6 +224,7 @@ class WidgetCORSMiddleware(BaseHTTPMiddleware):
         is_widget = (
             path.startswith("/api/widget/") or 
             path.startswith("/static/widget/") or
+            path.startswith("/api/agents/") or  # Public agent endpoints for widgets
             path == "/api/gemini-key" or
             "/kb-context" in path  # /api/agents/{id}/kb-context
         )

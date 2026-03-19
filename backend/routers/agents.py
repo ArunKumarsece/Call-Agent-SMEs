@@ -532,6 +532,65 @@ async def get_agent_kb_context(
     return {"context": context, "total_entries": total_entries}
 
 
+# ─── PUBLIC WIDGET ENDPOINTS (No Auth Required) ───────────────────────────────
+
+@router.get("/public/{agent_id}", response_model=AgentResponse)
+async def get_agent_public(
+    agent_id: str,
+    db: Session = Depends(get_db),
+):
+    """Get agent details for widget (public endpoint — no auth required)."""
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    kb_count = db.query(KnowledgeBase).filter(KnowledgeBase.agent_id == agent.id).count()
+    return _agent_response(agent, kb_count)
+
+
+@router.get("/public/{agent_id}/kb-context")
+async def get_agent_kb_context_public(
+    agent_id: str,
+    db: Session = Depends(get_db),
+):
+    """Get KB context for widget (public endpoint — no auth required)."""
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    from services.rag_config import MAX_CONTEXT_CHARS
+    kb_ids = db.query(KnowledgeBase.id).filter(KnowledgeBase.agent_id == agent_id).all()
+    kb_ids = [k[0] for k in kb_ids]
+    if not kb_ids:
+        return {"context": "", "total_entries": 0}
+
+    total_entries = db.query(KBEntry).filter(KBEntry.kb_id.in_(kb_ids)).count()
+    entries = db.query(KBEntry.content).filter(KBEntry.kb_id.in_(kb_ids)).all()
+    chunks = []
+    total = 0
+    for (content,) in entries:
+        remaining = MAX_CONTEXT_CHARS - total
+        if remaining <= 0:
+            break
+        if len(content) > remaining:
+            chunks.append(content[:remaining])
+            break
+        chunks.append(content)
+        total += len(content)
+
+    context = "\n\n".join(chunks)
+    shown = len(chunks)
+    if total_entries > shown:
+        header = (
+            f"[KB INFO: Showing {shown} entries out of {total_entries} total. "
+            f"This is a subset — for broad questions, mention highlights and "
+            f"ask the user to be more specific.]"
+        )
+        context = f"{header}\n\n{context}"
+
+    return {"context": context, "total_entries": total_entries}
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _get_or_404(agent_id: str, company_id: str, db: Session) -> Agent:

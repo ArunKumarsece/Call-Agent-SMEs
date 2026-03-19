@@ -215,11 +215,18 @@ from starlette.requests import Request as StarletteRequest
 
 
 class WidgetCORSMiddleware(BaseHTTPMiddleware):
-    """Add permissive CORS headers for /api/widget/* and /static/widget/* routes."""
+    """Add permissive CORS headers for widget-related endpoints."""
 
     async def dispatch(self, request: StarletteRequest, call_next):
         path = request.url.path
-        is_widget = path.startswith("/api/widget/") or path.startswith("/static/widget/")
+        
+        # Widget-specific routes + endpoints called by the widget
+        is_widget = (
+            path.startswith("/api/widget/") or 
+            path.startswith("/static/widget/") or
+            path == "/api/gemini-key" or
+            "/kb-context" in path  # /api/agents/{id}/kb-context
+        )
 
         if is_widget and request.method == "OPTIONS":
             from starlette.responses import Response

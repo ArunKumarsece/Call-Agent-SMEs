@@ -883,6 +883,7 @@ export class LiveAudioService {
         // Speaker voice lock — enabled for user interruption detection
         this._voiceLock = new SpeakerVoiceLock();
         this._voiceLocked = false;
+        this._lastVoiceLockPhase = null;
         // Prevent _playing from being re-set after client-side interrupt
         this._turnInterrupted = false;
         this._keepalive = null;
@@ -897,8 +898,13 @@ export class LiveAudioService {
         this._kbContext = '';
         this._turnInterrupted = false;
         this._voiceLocked = false;
+        this._lastVoiceLockPhase = null;
 
         // Voice lock enabled — will detect user speech and interrupt agent
+        // Phase flow:
+        //   WAITING  → agent greeting, system calibrates to ambient noise
+        //   ENROLLING → user speaks, system learns user's voiceprint (2 chunks)
+        //   LOCKED  → only user's voice passes, background noise/other speakers rejected
         this._voiceLock = new SpeakerVoiceLock();
 
         try {
@@ -1145,17 +1151,25 @@ export class LiveAudioService {
     }
 
     _processAudio(f32) {
-        // Voice lock enabled — detect user speech and interrupt agent
+        // Voice lock enabled — speaker verification + interruption detection
         if (!this._voiceLock) return f32;
 
         try {
             // Feed audio chunk to voice lock for speaker verification
             const result = this._voiceLock.process(f32);
+            const info = result.info || {};
             
-            // If user started speaking (voice verified), interrupt agent
-            if (result.userSpoke && !this._voiceLocked) {
+            // Log phase transitions for debugging
+            if (info.phase && info.phase !== this._lastVoiceLockPhase) {
+                console.log(`[VL] Phase: ${info.phase}`, info);
+                this._lastVoiceLockPhase = info.phase;
+            }
+            
+            // If now LOCKED and user speaking, interrupt agent
+            if (info.phase === 'LOCKED' && result.userSpoke && !this._voiceLocked) {
                 this._voiceLocked = true;
-                console.log('[LA] User speech detected → interrupting agent');
+                console.log('[LA] 🔒 Speaker LOCKED + Speech detected → interrupting agent');
+                console.log('[VL] Lock details:', { threshold: info.threshold, distance: info.distance });
                 // Send interruption to Gemini
                 this._send({ clientContent: { turnComplete: true } });
                 // Stop agent audio playback immediately
@@ -1165,8 +1179,14 @@ export class LiveAudioService {
                 this._emit('onInterrupted');
             }
             
-            // If silence detected, unlock
-            if (result.isSilent) {
+            // If LOCKED, only let verified speech through (gate other voices/noise)
+            if (info.phase === 'LOCKED' && !result.userSpoke) {
+                // Reject non-verified audio (background noise, other speakers)
+                return new Float32Array(0); // Return empty to signal filtered out
+            }
+            
+            // If silence detected, allow unlock for next turn
+            if (result.isSilent && info.phase === 'LOCKED') {
                 this._voiceLocked = false;
             }
             

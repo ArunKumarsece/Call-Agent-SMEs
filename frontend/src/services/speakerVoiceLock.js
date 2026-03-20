@@ -28,17 +28,17 @@ const SR = 16000;
 
 // Timing
 const WAIT_CHUNKS = 8;             // ~2s of silence calibration (fast)
-const ENROLL_MIN = 3;              // Only 3 speech chunks to lock (aggressive — fast lock)
-const ENROLL_TIMEOUT = 20;         // Give up after 20 chunks (~5s)
+const ENROLL_MIN = 2;              // Only 2 speech chunks to lock (VERY aggressive — lock on first response)
+const ENROLL_TIMEOUT = 15;         // Give up after 15 chunks (~4s)
 
 // Thresholds
-const VERIFY_INIT = 0.65;          // Initial cosine similarity threshold (generous)
-const VERIFY_MAX = 0.82;           // Max tightening
-const VERIFY_TIGHTEN = 0.004;      // Tighten per verified frame
-const ADAPT_RATE = 0.05;           // Centroid adaptation speed
-const ENERGY_FLOOR = 0.006;        // Absolute minimum RMS to consider
-const SPEECH_MULT = 2.0;           // Speech = ambient * SPEECH_MULT
-const ZCR_MAX = 0.35;              // Max zero-crossing rate for speech (noise is higher)
+const VERIFY_INIT = 0.72;          // Initial cosine similarity threshold (strict) — rejects dissimilar voices
+const VERIFY_MAX = 0.88;           // Max tightening (very tight — prevents other speakers)
+const VERIFY_TIGHTEN = 0.008;      // Tighten per verified frame (aggressive tightening)
+const ADAPT_RATE = 0.08;           // Centroid adaptation speed (learn user's patterns quickly)
+const ENERGY_FLOOR = 0.008;        // Absolute minimum RMS to consider (higher = reject quiet voices)
+const SPEECH_MULT = 2.5;           // Speech = ambient * SPEECH_MULT (stricter — reduce false positives)
+const ZCR_MAX = 0.30;              // Max zero-crossing rate for speech (lower = more selective)
 
 // ─── DSP: FFT (Radix-2 in-place) ─────────────────────────────────────────────
 

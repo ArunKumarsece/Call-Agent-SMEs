@@ -1159,17 +1159,17 @@ export class LiveAudioService {
             const result = this._voiceLock.process(f32);
             const info = result.info || {};
             
-            // Log phase transitions for debugging
-            if (info.phase && info.phase !== this._lastVoiceLockPhase) {
-                console.log(`[VL] Phase: ${info.phase}`, info);
-                this._lastVoiceLockPhase = info.phase;
+            // Log state transitions for debugging
+            if (info.state && info.state !== this._lastVoiceLockPhase) {
+                console.log(`[VL] State: ${info.state}`, info);
+                this._lastVoiceLockPhase = info.state;
             }
             
-            // If now LOCKED and user speaking, interrupt agent
-            if (info.phase === 'LOCKED' && result.userSpoke && !this._voiceLocked) {
+            // If LOCKED and verified speech (action === 'pass'), interrupt agent
+            if (info.state === 'LOCKED' && result.action === 'pass' && !this._voiceLocked) {
                 this._voiceLocked = true;
-                console.log('[LA] 🔒 Speaker LOCKED + Speech detected → interrupting agent');
-                console.log('[VL] Lock details:', { threshold: info.threshold, distance: info.distance });
+                console.log('[LA] 🔒 Speaker LOCKED + Verified speech → interrupting agent');
+                console.log('[VL] Lock details:', { threshold: info.threshold, similarity: info.similarity });
                 // Send interruption to Gemini
                 this._send({ clientContent: { turnComplete: true } });
                 // Stop agent audio playback immediately
@@ -1179,14 +1179,14 @@ export class LiveAudioService {
                 this._emit('onInterrupted');
             }
             
-            // If LOCKED, only let verified speech through (gate other voices/noise)
-            if (info.phase === 'LOCKED' && !result.userSpoke) {
-                // Reject non-verified audio (background noise, other speakers)
-                return new Float32Array(0); // Return empty to signal filtered out
+            // If LOCKED but non-verified audio (action === 'gate'), filter it out
+            if (info.state === 'LOCKED' && result.action === 'gate') {
+                // Voice lock already returns silence for non-verified audio
+                // Just track that we're still locked but didn't hear verified speech
             }
             
-            // If silence detected, allow unlock for next turn
-            if (result.isSilent && info.phase === 'LOCKED') {
+            // If silence detected (action === 'silence'), allow unlock for next turn
+            if (result.action === 'silence' && info.state === 'LOCKED') {
                 this._voiceLocked = false;
             }
             

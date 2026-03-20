@@ -215,21 +215,24 @@ from starlette.requests import Request as StarletteRequest
 
 
 class WidgetCORSMiddleware(BaseHTTPMiddleware):
-    """Add permissive CORS headers for widget-related endpoints."""
+    """Add permissive CORS headers for widget-specific PUBLIC endpoints only.
+    
+    Wildcard CORS (*) is only used for endpoints that don't require credentials.
+    Protected endpoints with auth need specific origin CORS.
+    """
 
     async def dispatch(self, request: StarletteRequest, call_next):
         path = request.url.path
         
-        # Widget-specific routes + endpoints called by the widget
-        is_widget = (
+        # WIDGET PUBLIC endpoints — these don't require auth, use wildcard CORS
+        is_widget_public = (
             path.startswith("/api/widget/") or 
             path.startswith("/static/widget/") or
-            path.startswith("/api/agents/") or  # Public agent endpoints for widgets
-            path == "/api/gemini-key" or
-            "/kb-context" in path  # /api/agents/{id}/kb-context
+            path.startswith("/api/agents/public/") or  # PUBLIC agent endpoints only
+            path == "/api/gemini-key"
         )
 
-        if is_widget and request.method == "OPTIONS":
+        if is_widget_public and request.method == "OPTIONS":
             from starlette.responses import Response
             return Response(status_code=200, headers={
                 "Access-Control-Allow-Origin": "*",
@@ -240,12 +243,13 @@ class WidgetCORSMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
 
-        if is_widget:
+        if is_widget_public:
             response.headers["Access-Control-Allow-Origin"] = "*"
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
             response.headers["Access-Control-Allow-Headers"] = "*"
 
         return response
+
 
 
 app.add_middleware(WidgetCORSMiddleware)

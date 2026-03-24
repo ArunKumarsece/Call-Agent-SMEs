@@ -665,7 +665,7 @@ async def _process_user_turn(
 
     # ── Use ultra-fast pipeline ────────────────────────────────────
     try:
-        logger.info(f\"[VOICE] Calling ultra_fast_pipeline.process_user_turn() for turn {turn_id}\")
+        logger.info(f"[VOICE] Calling ultra_fast_pipeline.process_user_turn() for turn {turn_id}")
         result = await ultra_fast_pipeline.process_user_turn(
             audio_bytes=audio_bytes if not user_text else b"",
             user_text=user_text,

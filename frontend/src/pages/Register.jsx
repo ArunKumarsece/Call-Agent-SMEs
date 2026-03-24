@@ -42,140 +42,136 @@ export default function Register() {
     const strength = getPasswordStrength();
 
     return (
-        <div className="login-page">
-            {/* Left Panel - Branding */}
-            <div className="login-brand-panel">
-                <div className="login-brand-content">
-                    <div className="login-brand-logo">
-                        <div className="logo-box"></div>
-                        <span>VoiceForge</span>
-                    </div>
-                    <h1>Launch Your Voice Agent</h1>
-                    <p>Create your workspace and deploy your first AI voice agent in minutes with no setup hassle.</p>
-                    <ul className="login-features">
-                        <li>Setup-ready templates</li>
-                        <li>Secure multi-tenant workspace</li>
-                        <li>Fast embeddable widget</li>
-                    </ul>
-                </div>
+        <div className="auth-page">
+            {/* Animated background elements */}
+            <div className="auth-bg-shapes">
+                <div className="shape-1"></div>
+                <div className="shape-2"></div>
+                <div className="shape-3"></div>
             </div>
 
-            {/* Right Panel - Form */}
-            <div className="login-form-panel">
-                <div className="login-form-container">
-                    <div className="login-header">
-                        <h2>Create account</h2>
-                        <p>Free workspace for your team</p>
+            {/* Main card */}
+            <div className="auth-card">
+                {/* Header with logo */}
+                <div className="auth-card-header">
+                    <div className="auth-logo">
+                        <span className="logo-icon">◆</span>
+                    </div>
+                    <h1>Create Account</h1>
+                    <p>Launch your VoiceForge workspace today</p>
+                </div>
+
+                {/* Error message */}
+                {error && (
+                    <div className="auth-alert auth-alert-error">
+                        <span className="alert-icon">!</span>
+                        <span>{error}</span>
+                    </div>
+                )}
+
+                {/* Form */}
+                <form onSubmit={handleSubmit} className="auth-form">
+                    <div className="form-field">
+                        <label>Company Name</label>
+                        <input
+                            type="text"
+                            placeholder="Your company"
+                            value={form.company_name}
+                            onChange={(e) => setForm({ ...form, company_name: e.target.value })}
+                            required
+                        />
                     </div>
 
-                    {error && (
-                        <div className="login-error">
-                            <span className="error-icon">⚠</span>
-                            <span>{error}</span>
-                        </div>
-                    )}
+                    <div className="form-field">
+                        <label>Full Name</label>
+                        <input
+                            type="text"
+                            placeholder="Your name"
+                            value={form.full_name}
+                            onChange={(e) => setForm({ ...form, full_name: e.target.value })}
+                            required
+                        />
+                    </div>
 
-                    <form onSubmit={handleSubmit}>
-                        <div className="form-group">
-                            <label>Company name</label>
+                    <div className="form-field">
+                        <label>Email Address</label>
+                        <input
+                            type="email"
+                            placeholder="name@company.com"
+                            value={form.email}
+                            onChange={(e) => setForm({ ...form, email: e.target.value })}
+                            required
+                            autoComplete="email"
+                        />
+                    </div>
+
+                    <div className="form-field">
+                        <label>Password</label>
+                        <div className="password-input-wrapper">
                             <input
-                                type="text"
-                                placeholder="Acme Corp"
-                                value={form.company_name}
-                                onChange={(e) => setForm({ ...form, company_name: e.target.value })}
+                                type={showPassword ? 'text' : 'password'}
+                                placeholder="Min 8 characters"
+                                value={form.password}
+                                onChange={(e) => setForm({ ...form, password: e.target.value })}
                                 required
+                                autoComplete="new-password"
                             />
+                            <button
+                                type="button"
+                                className="pwd-toggle"
+                                onClick={() => setShowPassword(!showPassword)}
+                                title={showPassword ? 'Hide' : 'Show'}
+                            >
+                                {showPassword ? '👁️' : '👁️‍🗨️'}
+                            </button>
                         </div>
-
-                        <div className="form-group">
-                            <label>Full name</label>
-                            <input
-                                type="text"
-                                placeholder="Jane Smith"
-                                value={form.full_name}
-                                onChange={(e) => setForm({ ...form, full_name: e.target.value })}
-                            />
-                        </div>
-
-                        <div className="form-group">
-                            <label>Email</label>
-                            <input
-                                type="email"
-                                placeholder="jane@acme.com"
-                                value={form.email}
-                                onChange={(e) => setForm({ ...form, email: e.target.value })}
-                                required
-                                autoComplete="email"
-                            />
-                        </div>
-
-                        <div className="form-row">
-                            <div className="form-group">
-                                <label>Password</label>
-                                <div className="password-field">
-                                    <input
-                                        type={showPassword ? 'text' : 'password'}
-                                        placeholder="Min 8 chars"
-                                        value={form.password}
-                                        onChange={(e) => setForm({ ...form, password: e.target.value })}
-                                        required
-                                        autoComplete="new-password"
-                                    />
-                                    <button
-                                        type="button"
-                                        className="toggle-password"
-                                        onClick={() => setShowPassword(!showPassword)}
-                                    >
-                                        {showPassword ? '✕' : '○'}
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div className="form-group">
-                                <label>Confirm</label>
-                                <div className="password-field">
-                                    <input
-                                        type={showConfirm ? 'text' : 'password'}
-                                        placeholder="Repeat"
-                                        value={form.confirm}
-                                        onChange={(e) => setForm({ ...form, confirm: e.target.value })}
-                                        required
-                                    />
-                                    <button
-                                        type="button"
-                                        className="toggle-password"
-                                        onClick={() => setShowConfirm(!showConfirm)}
-                                    >
-                                        {showConfirm ? '✕' : '○'}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-
                         {form.password && (
-                            <div className="password-strength">
+                            <div className="password-strength-meter">
                                 <div className="strength-bar">
                                     <div className="strength-fill" style={{ width: `${strength.width}%`, backgroundColor: strength.color }} />
                                 </div>
-                                <span className="strength-label">{strength.label}</span>
+                                <span className="strength-text">{strength.label}</span>
                             </div>
                         )}
-
-                        <button type="submit" className="login-button" disabled={loading}>
-                            {loading ? (
-                                <>
-                                    <span className="spinner"></span>
-                                    Creating...
-                                </>
-                            ) : (
-                                <>Create account</>
-                            )}
-                        </button>
-                    </form>
-
-                    <div className="login-footer">
-                        <span>Already have an account? <Link to="/login">Sign in</Link></span>
                     </div>
+
+                    <div className="form-field">
+                        <label>Confirm Password</label>
+                        <div className="password-input-wrapper">
+                            <input
+                                type={showConfirm ? 'text' : 'password'}
+                                placeholder="Repeat password"
+                                value={form.confirm}
+                                onChange={(e) => setForm({ ...form, confirm: e.target.value })}
+                                required
+                                autoComplete="new-password"
+                            />
+                            <button
+                                type="button"
+                                className="pwd-toggle"
+                                onClick={() => setShowConfirm(!showConfirm)}
+                                title={showConfirm ? 'Hide' : 'Show'}
+                            >
+                                {showConfirm ? '👁️' : '👁️‍🗨️'}
+                            </button>
+                        </div>
+                    </div>
+
+                    <button type="submit" className="auth-btn" disabled={loading}>
+                        {loading ? (
+                            <>
+                                <span className="btn-spinner"></span>
+                                Creating account...
+                            </>
+                        ) : (
+                            'Create Account'
+                        )}
+                    </button>
+                </form>
+
+                {/* Footer */}
+                <div className="auth-footer">
+                    <p>Already have an account? <Link to="/login">Sign in</Link></p>
                 </div>
             </div>
         </div>

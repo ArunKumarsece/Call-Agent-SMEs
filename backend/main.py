@@ -191,9 +191,14 @@ app = FastAPI(
 
 # ─── CORS ─────────────────────────────────────────────────
 # Get allowed origins from environment variable
-# Default: localhost for development
+# Default: localhost for development + Vercel production
 # For production: set ALLOWED_ORIGINS env var (comma-separated)
-DEFAULT_ORIGINS = ["http://localhost:5173", "http://localhost:3000", "http://localhost:4173"]
+DEFAULT_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:4173",
+    "https://call-agent-sm-l9au4nss7-phoneix496-8660s-projects.vercel.app",
+]
 allowed_origins_str = os.getenv("ALLOWED_ORIGINS", ",".join(DEFAULT_ORIGINS))
 allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
 

@@ -1068,7 +1068,7 @@ export class LiveAudioService {
                         voiceConfig: { prebuiltVoiceConfig: { voiceName: voice_id || 'Puck' } }
                     }
                 },
-                systemInstruction: { parts: [{ text: sys }] }
+                systemInstruction: sys
             }
         });
 
@@ -1076,12 +1076,12 @@ export class LiveAudioService {
     }
 
     _greet() {
+        // Greeting is sent as system initialization message, not as user input.
+        // The system prompt in setup already handles the greeting instruction.
+        // Just signal turn complete to let the model generate opening.
         this._send({
             clientContent: {
-                turns: [{ role: 'user', parts: [{ text:
-                    'Greet me warmly in Tanglish, say your name and role, ask how you can help. Max 2 sentences.'
-                }] }],
-                turnComplete: true,
+                turnComplete: true
             }
         });
     }
@@ -1147,8 +1147,11 @@ export class LiveAudioService {
 
     toggleMute() { this._muted = !this._muted; return this._muted; }
 
-    sendText(t) {
-        this._send({ clientContent: { turns:[{role:'user',parts:[{text:t}]}], turnComplete:true } });
+    async sendText(t) {
+        // Gemini Live API doesn't support direct text input in the WebSocket protocol.
+        // Text must be converted to audio first. For now, warn user.
+        console.warn('[LA] Text input not supported in voice mode. Use voice input instead.');
+        this._emit('onError', new Error('Text input disabled in voice mode.'));
     }
 
     // ── Voice lock (MFCC-based speaker verification) ──────────────────────────

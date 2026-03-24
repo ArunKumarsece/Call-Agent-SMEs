@@ -914,10 +914,23 @@ export class LiveAudioService {
             this._player.prime();
             const API_BASE = getAPIBase();
 
-            // Skip blocking KB fetch — fetch asynchronously after WS connects
-            // This cuts ~300ms latency from connect time
+            // 2. Load KB context SYNCHRONOUSLY before any agent responses
+            if (agentConfig.id) {
+                try {
+                    const kbStart = performance.now();
+                    const kbRes = await fetch(`${API_BASE}/agents/public/${agentConfig.id}/kb-context`);
+                    if (kbRes.ok) {
+                        const kbData = await kbRes.json();
+                        this._kbContext = kbData.context || '';
+                        const kbElapsed = performance.now() - kbStart;
+                        console.log(`[LA] KB context loaded BEFORE setup in ${kbElapsed.toFixed(0)}ms: ${this._kbContext.length} chars`);
+                    }
+                } catch (e) {
+                    console.warn('[LA] KB fetch failed, continuing without KB:', e.message);
+                }
+            }
 
-            // 2. Get Gemini key
+            // 3. Get Gemini key
             const r = await fetch(`${API_BASE}/gemini-key`);
             if (!r.ok) throw new Error('Cannot load Gemini key');
             const { key } = await r.json();
@@ -969,17 +982,9 @@ export class LiveAudioService {
                         await this._startMic();
                         this._live = true;
                         this._emit('onOpen');
-                        // Safe to send greeting now
+                        // Safe to send greeting now (KB already loaded synchronously in connect())
                         this._greet();
                         resolve();
-                        
-                        // Fetch KB context asynchronously in background (don't block)
-                        // This runs AFTER setupComplete, not before
-                        if (this._cfg.id) {
-                            this._fetchKBContextAsync().catch(e => {
-                                console.warn('[LA] Async KB fetch failed:', e.message);
-                            });
-                        }
                     } catch(e) {
                         reject(new Error('Mic: ' + e.message));
                     }
@@ -1223,10 +1228,11 @@ export class LiveAudioService {
                 }
             } 
             // SPEECH END: User stops speaking (silence after speech)
-            else if (!isSpeech && this._lastWasSpeech && this._vadSilenceFrames === 1) {
-                // Only on FIRST frame of silence (avoid repeated triggers)
+            // Require 20+ frames of silence (~2 seconds) to account for natural speech pauses
+            else if (!isSpeech && this._lastWasSpeech && this._vadSilenceFrames >= 20) {
+                // Only trigger after sustained silence (avoid natural pauses triggering mid-sentence)
                 const speechDuration = Date.now() - this._speechStart;
-                console.log(`[LA] ✓ User finished speaking (${speechDuration}ms). Sending turnComplete to close user turn...`);
+                console.log(`[LA] ✓ User finished speaking (${speechDuration}ms, ${this._vadSilenceFrames} silence frames). Sending turnComplete...`);
                 // Send turnComplete to signal end of user input
                 this._send({
                     clientContent: {
@@ -1306,23 +1312,6 @@ export class LiveAudioService {
         }
 
         return isSpeech && this._vadConsecutiveSpeech >= 2; // Require 2 consecutive speech frames
-    }
-
-    // Fetch KB context asynchronously (non-blocking)
-    async _fetchKBContextAsync() {
-        try {
-            const API_BASE = getAPIBase();
-            const start = performance.now();
-            const kbRes = await fetch(`${API_BASE}/agents/public/${this._cfg.id}/kb-context`);
-            if (kbRes.ok) {
-                const kbData = await kbRes.json();
-                this._kbContext = kbData.context || '';
-                const elapsed = performance.now() - start;
-                console.log(`[LA] KB context loaded async in ${elapsed.toFixed(0)}ms: ${this._kbContext.length} chars`);
-            }
-        } catch (e) {
-            console.warn('[LA] Async KB context fetch failed:', e.message);
-        }
     }
 
     // Static cleanup method to reset AudioContext/Worklet if needed

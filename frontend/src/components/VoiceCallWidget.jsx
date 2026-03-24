@@ -67,7 +67,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
     async function startCall() {
         if (connected || connecting) return;
         setConnecting(true);
-        setStatusDebounced('Connecting...');
+        setStatusDebounced('⏳ Connecting...');
         setMessages([]);
 
         const service = new LiveAudioService();
@@ -84,7 +84,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
             onOpen: () => {
                 setConnected(true);
                 setConnecting(false);
-                setStatusDebounced('🟢 Live');
+                setStatusDebounced('🟢 Ready — speak now');
                 if (mode === 'chat') {
                     addMessage('system', `Connected to ${agentName}`);
                 }
@@ -95,22 +95,28 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                 setConnected(false);
                 setConnecting(false);
                 setMuted(false);
-                setStatusDebounced('Ended');
+                setStatusDebounced('Call ended');
                 if (mode === 'chat') {
                     addMessage('system', 'Disconnected');
                 }
             },
             onError: (e) => {
-                console.error('Error:', e);
+                console.error('Voice error:', e);
                 setConnected(false);
                 setConnecting(false);
-                setStatusDebounced(`Error: ${e?.message || 'Failed'}`);
+                setStatusDebounced(`❌ ${e?.message || 'Error'}`);
                 if (mode === 'chat') {
                     addMessage('system', `⚠️ ${e?.message}`);
                 }
             },
             onInterrupted: () => {
                 setStatusDebounced('⚡ Interrupted');
+                console.log('[Widget] Agent interrupted, ready for new input');
+            },
+            onTurnComplete: () => {
+                // Server acknowledged end of speech & processed user input
+                setStatusDebounced('🎧 Listening for response...');
+                console.log('[Widget] Turn complete, agent processing');
             },
             onTranscription: (text, isUser) => {
                 if (!text || !text.trim() || mode !== 'chat') return;
@@ -124,7 +130,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                         updateLastMessage('user', `🎤 ${userTranscriptRef.current}`);
                     }
                     agentTranscriptRef.current = '';
-                    setStatusDebounced('🟢 Listening');
+                    setStatusDebounced('⏸️ Processing...');
                 } else {
                     if (agentTranscriptRef.current === '') {
                         agentTranscriptRef.current = text;
@@ -134,14 +140,14 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                         updateLastMessage('agent', agentTranscriptRef.current);
                     }
                     userTranscriptRef.current = '';
-                    setStatusDebounced('🗣️ Speaking');
+                    setStatusDebounced('🗣️ Agent speaking');
                 }
             },
         }, { mode });
 
         if (!success) {
             setConnecting(false);
-            setStatusDebounced('Failed');
+            setStatusDebounced('❌ Connection failed');
         }
     }
 
@@ -173,16 +179,17 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
         if (connected && liveServiceRef.current) {
             addMessage('user', msg);
             liveServiceRef.current.sendText(msg);
-            setStatusDebounced('Thinking...');
+            setStatusDebounced('⏸️ Processing your message...');
         } else {
             addMessage('user', msg);
-            setStatusDebounced('Thinking...');
+            setStatusDebounced('⏳ Thinking...');
             try {
                 const response = await agentsAPI.chat(agentId, msg);
                 addMessage('agent', response.response);
-                setStatusDebounced('Ready');
+                setStatusDebounced('✅ Ready');
             } catch (err) {
-                addMessage('system', `⚠️ Error`);
+                addMessage('system', `⚠️ Error: ${err.message}`);
+                setStatusDebounced('❌ Error');
             }
         }
     }

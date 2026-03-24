@@ -895,7 +895,14 @@ export class LiveAudioService {
         this._vadConsecutiveSpeech = 0;  // Frames of speech to trigger interrupt
         this._lastWasSpeech = false;  // Track previous frame state
         this._speechStart = 0;  // Track speech start time
-        this._silenceRequired = 3;  // Frames of silence to trigger end-of-speech (300ms vs 2s)
+        this._silenceRequired = 8;  // Frames of silence to trigger end-of-speech (~800ms for Tamil/Tanglish natural pauses)
+        // Turn tracking for server-side cancellation
+        this._currentTurnId = null;
+        this._pendingTurnComplete = false;
+        this._turnDebounceTimer = null;
+        // Speech buffer to validate speech segments
+        this._speechFrameBuffer = [];
+        this._minSpeechFrames = 10;  // Require 10+ frames of continuous speech before accepting input
     }
 
     async connect(agentConfig, callbacks, options = {}) {
@@ -1221,26 +1228,62 @@ export class LiveAudioService {
             if (isSpeech && !this._lastWasSpeech) {
                 this._speechStart = Date.now();
                 this._lastWasSpeech = true;
-                console.log('[LA] ✓ Speech detected - stopping agent playback');
+                this._speechFrameBuffer = [f32Chunk];  // Start buffering speech
+                this._vadConsecutiveSpeech = 1;
+                console.log('[LA] 🎤 Speech detected, stopping agent playback and creating new turn');
+                
+                // CRITICAL FIX: Send explicit interrupt BEFORE stopping playback
+                this._send({ clientContent: { turnComplete: true } });
+                
                 // Immediately stop the agent response
                 if (this._player) {
                     this._player.stop();
                 }
+                
+                // Mark turn as interrupted to discard old audio chunks
+                this._turnInterrupted = true;
+                // Generate new turn ID for server-side tracking
+                this._currentTurnId = `turn_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+                console.log(`[LA] New turn ID: ${this._currentTurnId}`);
             } 
+            // Continue buffering speech
+            else if (isSpeech && this._lastWasSpeech) {
+                this._speechFrameBuffer.push(f32Chunk);
+                this._vadConsecutiveSpeech++;
+                this._vadSilenceFrames = 0;
+            }
             // SPEECH END: User stops speaking (silence after speech)
-            // Require 20+ frames of silence (~2 seconds) to account for natural speech pauses
-            else if (!isSpeech && this._lastWasSpeech && this._vadSilenceFrames >= 20) {
-                // Only trigger after sustained silence (avoid natural pauses triggering mid-sentence)
-                const speechDuration = Date.now() - this._speechStart;
-                console.log(`[LA] ✓ User finished speaking (${speechDuration}ms, ${this._vadSilenceFrames} silence frames). Sending turnComplete...`);
-                // Send turnComplete to signal end of user input
-                this._send({
-                    clientContent: {
-                        turns: [{ role: 'user', parts: [{ text: '(user speech audio)' }] }],
-                        turnComplete: true
-                    }
-                });
-                this._lastWasSpeech = false;
+            // Require 8+ frames (~800ms) of silence to account for natural Tanglish speech pauses
+            else if (!isSpeech && this._lastWasSpeech) {
+                this._vadSilenceFrames++;
+                
+                // Validate enough speech was captured before triggering turnComplete
+                const hasSufficientSpeech = this._speechFrameBuffer.length >= this._minSpeechFrames;
+                const hasSufficientSilence = this._vadSilenceFrames >= this._silenceRequired;
+                
+                if (hasSufficientSilence && hasSufficientSpeech && !this._pendingTurnComplete) {
+                    this._pendingTurnComplete = true;
+                    const speechDuration = Date.now() - this._speechStart;
+                    const bufferLen = this._speechFrameBuffer.length;
+                    console.log(`[LA] ✓ User finished speaking (${speechDuration}ms, ${bufferLen} speech frames, ${this._vadSilenceFrames} silence frames). Sending turnComplete...`);
+                    
+                    // Debounce: wait 100ms to ensure no new speech arrives
+                    if (this._turnDebounceTimer) clearTimeout(this._turnDebounceTimer);
+                    this._turnDebounceTimer = setTimeout(() => {
+                        if (this._lastWasSpeech === false && this._pendingTurnComplete) {
+                            this._send({
+                                clientContent: {
+                                    turns: [{ role: 'user', parts: [{ text: '(user speech audio)', meta: { turnId: this._currentTurnId } }] }],
+                                    turnComplete: true
+                                }
+                            });
+                            this._pendingTurnComplete = false;
+                        }
+                    }, 100);
+                    
+                    this._lastWasSpeech = false;
+                    this._speechFrameBuffer = [];
+                }
             }
             
             // Send audio chunk to Gemini Live
@@ -1273,12 +1316,16 @@ export class LiveAudioService {
 
     _stopMic() {
         if (this._keepalive) { clearInterval(this._keepalive); this._keepalive = null; }
+        if (this._turnDebounceTimer) { clearTimeout(this._turnDebounceTimer); this._turnDebounceTimer = null; }
         // Don't disconnect worklet — keep it for reuse
         if (this._worklet) { 
             try { this._worklet.disconnect(); } catch(_){}
             // Don't null it out — let shared instance stay loaded
         }
         if (this._stream)  { this._stream.getTracks().forEach(t=>t.stop()); this._stream = null; }
+        this._speechFrameBuffer = [];
+        this._currentTurnId = null;
+        this._pendingTurnComplete = false;
     }
 
     /**
@@ -1311,7 +1358,22 @@ export class LiveAudioService {
             }
         }
 
+        // Return true only if we have established speech (more robust than 2 frames for noisy environments)
         return isSpeech && this._vadConsecutiveSpeech >= 2; // Require 2 consecutive speech frames
+    }
+
+    /**
+     * Send explicit interrupt to server to cancel in-flight response generation
+     */
+    _sendInterrupt() {
+        if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
+        console.log(`[LA] Sending interrupt for turn ${this._currentTurnId}`);
+        this._send({
+            clientContent: {
+                turns: [{ role: 'user', parts: [{ text: 'INTERRUPT', meta: { turnId: this._currentTurnId, action: 'interrupt' } }] }],
+                turnComplete: true
+            }
+        });
     }
 
     // Static cleanup method to reset AudioContext/Worklet if needed

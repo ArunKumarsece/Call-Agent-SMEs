@@ -14,6 +14,26 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
     const messagesEndRef = useRef(null);
     const userTranscriptRef = useRef('');
     const agentTranscriptRef = useRef('');
+    const statusDebounceTimerRef = useRef(null);  // Debounce timer for status updates
+
+    // Debounced status setter to prevent rapid UI flickering
+    const setStatusDebounced = (newStatus) => {
+        if (statusDebounceTimerRef.current) {
+            clearTimeout(statusDebounceTimerRef.current);
+        }
+        // For important states, set immediately; for transient states, debounce 200ms
+        const transientStates = ['Thinking...', 'Processing...', 'Listening', 'Speaking'];
+        const isTransient = transientStates.some(s => newStatus?.includes(s));
+        
+        if (!isTransient) {
+            setStatus(newStatus);
+        } else {
+            statusDebounceTimerRef.current = setTimeout(() => {
+                setStatus(newStatus);
+                statusDebounceTimerRef.current = null;
+            }, 150);
+        }
+    };
 
     useEffect(() => {
         return () => {
@@ -47,7 +67,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
     async function startCall() {
         if (connected || connecting) return;
         setConnecting(true);
-        setStatus('Connecting...');
+        setStatusDebounced('Connecting...');
         setMessages([]);
 
         const service = new LiveAudioService();
@@ -64,7 +84,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
             onOpen: () => {
                 setConnected(true);
                 setConnecting(false);
-                setStatus('🟢 Live');
+                setStatusDebounced('🟢 Live');
                 if (mode === 'chat') {
                     addMessage('system', `Connected to ${agentName}`);
                 }
@@ -75,7 +95,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                 setConnected(false);
                 setConnecting(false);
                 setMuted(false);
-                setStatus('Ended');
+                setStatusDebounced('Ended');
                 if (mode === 'chat') {
                     addMessage('system', 'Disconnected');
                 }
@@ -84,13 +104,13 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                 console.error('Error:', e);
                 setConnected(false);
                 setConnecting(false);
-                setStatus(`Error: ${e?.message || 'Failed'}`);
+                setStatusDebounced(`Error: ${e?.message || 'Failed'}`);
                 if (mode === 'chat') {
                     addMessage('system', `⚠️ ${e?.message}`);
                 }
             },
             onInterrupted: () => {
-                setStatus('⚡ Interrupted');
+                setStatusDebounced('⚡ Interrupted');
             },
             onTranscription: (text, isUser) => {
                 if (!text || !text.trim() || mode !== 'chat') return;
@@ -104,7 +124,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                         updateLastMessage('user', `🎤 ${userTranscriptRef.current}`);
                     }
                     agentTranscriptRef.current = '';
-                    setStatus('🟢 Listening');
+                    setStatusDebounced('🟢 Listening');
                 } else {
                     if (agentTranscriptRef.current === '') {
                         agentTranscriptRef.current = text;
@@ -114,14 +134,14 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                         updateLastMessage('agent', agentTranscriptRef.current);
                     }
                     userTranscriptRef.current = '';
-                    setStatus('🗣️ Speaking');
+                    setStatusDebounced('🗣️ Speaking');
                 }
             },
         }, { mode });
 
         if (!success) {
             setConnecting(false);
-            setStatus('Failed');
+            setStatusDebounced('Failed');
         }
     }
 
@@ -139,7 +159,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
         if (liveServiceRef.current) {
             const nowMuted = liveServiceRef.current.toggleMute();
             setMuted(nowMuted);
-            setStatus(nowMuted ? '🔇 Muted' : '🎤 On');
+            setStatusDebounced(nowMuted ? '🔇 Muted' : '🎬 On');
         }
     }
 
@@ -153,14 +173,14 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
         if (connected && liveServiceRef.current) {
             addMessage('user', msg);
             liveServiceRef.current.sendText(msg);
-            setStatus('Thinking...');
+            setStatusDebounced('Thinking...');
         } else {
             addMessage('user', msg);
-            setStatus('Thinking...');
+            setStatusDebounced('Thinking...');
             try {
                 const response = await agentsAPI.chat(agentId, msg);
                 addMessage('agent', response.response);
-                setStatus('Ready');
+                setStatusDebounced('Ready');
             } catch (err) {
                 addMessage('system', `⚠️ Error`);
             }

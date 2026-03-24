@@ -557,6 +557,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["voice_call"])
 
 
+class CancellationToken:
+    """Simple cancellation token for aborting in-flight turns."""
+    def __init__(self, turn_id: str):
+        self.turn_id = turn_id
+        self.cancelled = False
+        self.created_at = asyncio.get_event_loop().time()
+    
+    def cancel(self):
+        logger.info(f"[CANCEL] Turn {self.turn_id} marked for cancellation")
+        self.cancelled = True
+    
+    def is_cancelled(self) -> bool:
+        return self.cancelled
+
+
 async def _send(ws: WebSocket, payload: dict):
     """Safe send wrapper."""
     try:
@@ -616,13 +631,16 @@ async def _process_user_turn(
     agent_id: str,
     conversation_history: list,
     db,
+    cancellation_token: CancellationToken = None,
 ):
     """
     Ultra-fast pipeline: 1-2 second latency target.
     Concurrent STT + RAG, streaming TTS with Gemini Flash.
+    Supports cancellation: if token is cancelled, pipeline aborts early.
     """
     
-    logger.info(f"[VOICE] >>> START user turn | agent={agent.name} | mode={'text' if user_text else 'audio'} | input_len={len(user_text) if user_text else len(audio_bytes)}")
+    turn_id = cancellation_token.turn_id if cancellation_token else "unknown"
+    logger.info(f"[VOICE] >>> START user turn {turn_id} | agent={agent.name} | mode={'text' if user_text else 'audio'} | input_len={len(user_text) if user_text else len(audio_bytes)}")
 
     audio_chunks_queue = []  # Collect streaming audio chunks
 
@@ -647,7 +665,7 @@ async def _process_user_turn(
 
     # ── Use ultra-fast pipeline ────────────────────────────────────
     try:
-        logger.info("[VOICE] Calling ultra_fast_pipeline.process_user_turn()")
+        logger.info(f\"[VOICE] Calling ultra_fast_pipeline.process_user_turn() for turn {turn_id}\")
         result = await ultra_fast_pipeline.process_user_turn(
             audio_bytes=audio_bytes if not user_text else b"",
             user_text=user_text,
@@ -656,7 +674,7 @@ async def _process_user_turn(
             db=db,
             conversation_history=conversation_history,
             on_status=status_update,
-            on_audio_chunk=on_audio_chunk,
+            on_audio_chunk=on_audio_chunk,\n            cancellation_token=cancellation_token,
         )
 
         response_text = result["response_text"]
@@ -783,6 +801,8 @@ async def voice_call(websocket: WebSocket, agent_id: str, token: str = Query(def
         audio_buffer = b""
         agent_is_speaking = False   # track whether agent TTS is in progress
         turn_count = 0
+        current_turn_id: str = None  # Track current turn for cancellation
+        current_cancellation_token: CancellationToken = None  # Cancellation token for in-flight turn
 
         # ── Step 1: Agent speaks first ────────────────────────────
         logger.info(f"[WS] Agent greeting starting for {agent.name}")
@@ -813,37 +833,55 @@ async def voice_call(websocket: WebSocket, agent_id: str, token: str = Query(def
                     audio_for_stt = base64.b64decode(full_b64) if full_b64 else audio_buffer
                     audio_buffer = b""
                     turn_count += 1
-                    logger.info(f"[WS] end_of_speech detected | turn={turn_count} | audio_len={len(audio_for_stt)}B")
+                    current_turn_id = f"turn_{turn_count}_{agent_id[:4]}"
+                    current_cancellation_token = CancellationToken(current_turn_id)
+                    logger.info(f"[WS] end_of_speech detected | turn={current_turn_id} | audio_len={len(audio_for_stt)}B")
 
                     if len(audio_for_stt) < 500:
                         await _send(websocket, {"type": "listening"})
                         await _send(websocket, {"type": "status", "text": "Didn't catch that. Please speak again."})
+                        current_turn_id = None
+                        current_cancellation_token = None
                         continue
 
                     await _send(websocket, {"type": "status", "text": "Processing..."})
 
-                    # Pass audio to optimized pipeline (it will handle STT internally)
+                    # Pass audio to optimized pipeline with cancellation token
                     await _process_user_turn(
                         websocket, None, audio_for_stt, agent, agent_id,
-                        conversation_history, db
+                        conversation_history, db, current_cancellation_token
                     )
+                    # Clear turn state after completion
+                    current_turn_id = None
+                    current_cancellation_token = None
 
                 elif msg_type == "text":
                     user_text = msg.get("text", "").strip()
                     if not user_text:
                         continue
                     turn_count += 1
-                    logger.info(f"[WS] Text input | turn={turn_count} | text='{user_text[:50]}...'")
+                    current_turn_id = f"turn_{turn_count}_{agent_id[:4]}"
+                    current_cancellation_token = CancellationToken(current_turn_id)
+                    logger.info(f"[WS] Text input | turn={current_turn_id} | text='{user_text[:50]}...'")
                     await _send(websocket, {"type": "transcript", "text": user_text})
-                    # Pass empty audio bytes for text-only input
+                    # Pass empty audio bytes for text-only input with cancellation token
                     await _process_user_turn(
                         websocket, user_text, b"", agent, agent_id,
-                        conversation_history, db
+                        conversation_history, db, current_cancellation_token
                     )
+                    # Clear turn state after completion
+                    current_turn_id = None
+                    current_cancellation_token = None
 
                 elif msg_type == "interrupt":
-                    # User interrupted agent — stop speaking, start listening
-                    logger.debug(f"[WS] User interrupt | connection={connection_id}")
+                    # User interrupted agent — cancel in-flight turn and stop speaking
+                    logger.info(f"[WS] 🔴 User interrupt | connection={connection_id} | cancelling_turn={current_turn_id}")
+                    
+                    # Cancel the current in-flight turn if one exists
+                    if current_cancellation_token:
+                        current_cancellation_token.cancel()
+                        logger.info(f"[WS] Cancellation requested for {current_turn_id}")
+                    
                     await _send(websocket, {"type": "agent_speaking_end"})
                     await _send(websocket, {"type": "listening"})
                     await _send(websocket, {"type": "status", "text": "Go ahead, I'm listening..."})

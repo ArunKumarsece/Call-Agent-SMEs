@@ -83,7 +83,7 @@ class UltraFastPipeline:
         db: Session,
         conversation_history: list,
         on_status: callable = None,
-        on_audio_chunk: callable = None,  # Called with (audio_data, text_chunk)
+        on_audio_chunk: callable = None,  # Called with (audio_data, text_chunk)\n        cancellation_token = None,  # CancellationToken for aborting mid-execution
     ) -> Dict[str, Any]:
         """
         Ultra-fast processing with streaming TTS.
@@ -116,6 +116,18 @@ class UltraFastPipeline:
         """
         start_total = time.time()
         latencies = {}
+
+        # Early abort if turn was cancelled before processing even started
+        if cancellation_token and cancellation_token.is_cancelled():
+            self.logger.warning("[Pipeline] Turn cancelled - aborting before processing starts")
+            return {
+                "response_text": "(request cancelled)",
+                "audio_bytes": b"",
+                "transcript": "",
+                "rag_context": "",
+                "decision": None,
+                "latencies": {"stt_ms": 0, "rag_ms": 0, "agent_ms": 0, "tts_ms": 0, "total_ms": 0},
+            }
 
         if on_status:
             await on_status("Processing audio...")
@@ -168,6 +180,18 @@ class UltraFastPipeline:
                     self.logger.warning(f"RAG error: {results[rag_idx]}")
 
         latencies["stt_and_rag_parallel_ms"] = int((time.time() - start_phase1) * 1000)
+
+        # Check if turn was cancelled while processing phase 1 (STT + RAG)
+        if cancellation_token and cancellation_token.is_cancelled():
+            self.logger.warning("[Pipeline] Turn cancelled during phase 1 - aborting before agent response")
+            return {
+                "response_text": "(request cancelled)",
+                "audio_bytes": b"",
+                "transcript": transcript,
+                "rag_context": "",
+                "decision": None,
+                "latencies": {"stt_ms": latencies.get("stt_and_rag_parallel_ms", 0), "rag_ms": 0, "agent_ms": 0, "tts_ms": 0, "total_ms": int((time.time() - start_total) * 1000)},
+            }
 
         # ═════════════════════════════════════════════════════════════════
         # PHASE 2: Agent + Streaming TTS in parallel

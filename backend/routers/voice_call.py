@@ -545,10 +545,14 @@ from services.gemini_service import (
 )
 from services.enhanced_rag import search_knowledge_base_enhanced, assemble_context
 from services.multi_agent import orchestrator
+from services.ultra_fast_pipeline import ultra_fast_pipeline
 import json
 import base64
 import asyncio
 import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["voice_call"])
 
@@ -607,44 +611,78 @@ async def _agent_greet_and_speak(
 async def _process_user_turn(
     ws: WebSocket,
     user_text: str,
+    audio_bytes: bytes,
     agent,
     agent_id: str,
     conversation_history: list,
     db,
 ):
-    """Full pipeline: RAG → multi-agent → TTS → back to listening."""
+    """
+    Ultra-fast pipeline: 1-2 second latency target.
+    Concurrent STT + RAG, streaming TTS with Gemini Flash.
+    """
 
-    await _send(ws, {"type": "processing"})
-    await _send(ws, {"type": "status", "text": "Thinking..."})
+    audio_chunks_queue = []  # Collect streaming audio chunks
 
-    # ── Enhanced RAG ──────────────────────────────────────────────
+    async def status_update(msg: str):
+        """Send status updates to client."""
+        await _send(ws, {"type": "status", "text": msg})
+
+    async def on_audio_chunk(chunk: bytes, text: str):
+        """Called as TTS chunks are generated from streaming tokens."""
+        audio_chunks_queue.append(chunk)
+        # Send audio chunk immediately to client
+        try:
+            await _send(ws, {
+                "type": "audio_chunk",
+                "data": base64.b64encode(chunk).decode("utf-8"),
+                "text": text,
+            })
+        except Exception as e:
+            logger.warning(f"Failed to send audio chunk: {e}")
+
+    # ── Use ultra-fast pipeline ────────────────────────────────────
     try:
-        results = await search_knowledge_base_enhanced(user_text, agent_id, db, top_k=5)
-        context = assemble_context(results)
-    except Exception as e:
-        print(f"RAG error (non-fatal): {e}")
-        results, context = [], ""
-
-    # ── Multi-agent orchestration ─────────────────────────────────
-    conversation_history.append({"role": "user", "content": user_text})
-
-    try:
-        decision = await orchestrator.run(
-            user_message=user_text,
-            rag_context=context,
-            agent_system_prompt=agent.system_prompt or "",
-            agent_role=agent.role,
+        result = await ultra_fast_pipeline.process_user_turn(
+            audio_bytes=audio_bytes if not user_text else b"",
+            user_text=user_text,
+            agent=agent,
+            agent_id=agent_id,
+            db=db,
             conversation_history=conversation_history,
+            on_status=status_update,
+            on_audio_chunk=on_audio_chunk,
         )
+
+        response_text = result["response_text"]
+        tts_bytes = result["audio_bytes"]
+        transcript = result["transcript"]
+        context = result["rag_context"]
+        decision = result["decision"]
+        latencies = result["latencies"]
+
     except Exception as e:
+        import traceback
         traceback.print_exc()
+        logger.error(f"Pipeline error: {e}")
+        response_text = "Sorry, I encountered an error. Please try again."
+        tts_bytes = await text_to_speech(response_text, agent.voice_id or "Puck")
+        transcript = user_text or ""
         decision = None
+        latencies = {
+            "stt_ms": 0,
+            "rag_ms": 0,
+            "agent_ms": 0,
+            "tts_ms": 0,
+            "total_ms": 0,
+        }
 
+    # ── Update conversation history ─────────────────────────────────
+    conversation_history.append({"role": "user", "content": transcript})
+    conversation_history.append({"role": "assistant", "content": response_text})
+
+    # ── Send agent decision ─────────────────────────────────────────
     if decision:
-        response_text = decision.final_response
-        conversation_history.append({"role": "assistant", "content": response_text})
-
-        # Send decision metadata
         await _send(ws, {
             "type": "agent_decision",
             "data": {
@@ -660,25 +698,28 @@ async def _process_user_turn(
 
         if decision.should_escalate:
             await _send(ws, {"type": "escalation", "text": "⚠️ Connecting you to a human agent..."})
-    else:
-        response_text = "மன்னிக்கவும், can you repeat that please?"
-        conversation_history.append({"role": "assistant", "content": response_text})
 
-    # ── Stream response text ──────────────────────────────────────
+    # ── Send final response and latencies ────────────────────────────
     await _send(ws, {"type": "agent_speaking_start"})
     await _send(ws, {
         "type": "response",
         "text": response_text,
-        "meta": {"intent": getattr(decision, "intent", ""), "sentiment": getattr(decision, "sentiment", "")},
+        "transcript": transcript,
+        "latencies_ms": latencies,
+        "meta": {
+            "intent": decision.intent if decision else "",
+            "sentiment": decision.sentiment if decision else "",
+            "streaming": len(audio_chunks_queue) > 0,
+        },
     })
 
-    # ── TTS ───────────────────────────────────────────────────────
-    tts_bytes = await text_to_speech(response_text, agent.voice_id or "Puck")
-    await _send(ws, {
-        "type": "audio",
-        "data": base64.b64encode(tts_bytes).decode("utf-8"),
-        "text": response_text,
-    })
+    # If we haven't already streamed audio chunks, send complete TTS now
+    if not audio_chunks_queue and tts_bytes:
+        await _send(ws, {
+            "type": "audio",
+            "data": base64.b64encode(tts_bytes).decode("utf-8"),
+            "text": response_text,
+        })
 
     await _send(ws, {"type": "agent_speaking_end"})
     await _send(ws, {"type": "listening"})
@@ -748,18 +789,11 @@ async def voice_call(websocket: WebSocket, agent_id: str, token: str = Query(def
                         await _send(websocket, {"type": "status", "text": "Didn't catch that. Please speak again."})
                         continue
 
-                    await _send(websocket, {"type": "status", "text": "Processing speech..."})
+                    await _send(websocket, {"type": "status", "text": "Processing..."})
 
-                    transcript = await speech_to_text(audio_for_stt)
-
-                    if not transcript or len(transcript.strip()) < 2:
-                        await _send(websocket, {"type": "listening"})
-                        await _send(websocket, {"type": "status", "text": "Didn't catch that. Please try again."})
-                        continue
-
-                    await _send(websocket, {"type": "transcript", "text": transcript})
+                    # Pass audio to optimized pipeline (it will handle STT internally)
                     await _process_user_turn(
-                        websocket, transcript, agent, agent_id,
+                        websocket, None, audio_for_stt, agent, agent_id,
                         conversation_history, db
                     )
 
@@ -768,8 +802,9 @@ async def voice_call(websocket: WebSocket, agent_id: str, token: str = Query(def
                     if not user_text:
                         continue
                     await _send(websocket, {"type": "transcript", "text": user_text})
+                    # Pass empty audio bytes for text-only input
                     await _process_user_turn(
-                        websocket, user_text, agent, agent_id,
+                        websocket, user_text, b"", agent, agent_id,
                         conversation_history, db
                     )
 

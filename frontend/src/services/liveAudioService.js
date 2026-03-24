@@ -867,12 +867,16 @@ export class LiveAudioService {
     // Shared static instances across calls to reduce latency
     static _sharedMicCtx = null;
     static _sharedWorkletLoaded = false;
+    static _sharedWorklet = null;  // Reuse worklet node to prevent listener accumulation
+    static _sharedSource = null;   // Reuse media stream source
+    static _sharedStream = null;   // Reuse media stream
 
     constructor() {
         this._ws      = null;
         this._micCtx  = null;
         this._worklet = null;
         this._stream  = null;
+        this._source  = null;
         this._player  = new Player();
         this._muted   = false;
         this._live    = false;
@@ -880,32 +884,21 @@ export class LiveAudioService {
         this._playing = false;
         this._cbs     = {};
         this._cfg     = null;
-        // Speaker voice lock — enabled for user interruption detection
-        this._voiceLock = new SpeakerVoiceLock();
-        this._voiceLocked = false;
-        this._lastVoiceLockPhase = null;
+        this._mode    = 'chat';  // 'voice' or 'chat' mode
         // Prevent _playing from being re-set after client-side interrupt
         this._turnInterrupted = false;
         this._keepalive = null;
     }
 
-    async connect(agentConfig, callbacks) {
+    async connect(agentConfig, callbacks, options = {}) {
         this._cbs  = callbacks || {};
         this._cfg  = agentConfig;
+        this._mode = options.mode || 'chat';  // 'voice' or 'chat'
         this._stop = false;
         this._live = false;
         this._playing = false;
         this._kbContext = '';
         this._turnInterrupted = false;
-        this._voiceLocked = false;
-        this._lastVoiceLockPhase = null;
-
-        // Voice lock enabled — will detect user speech and interrupt agent
-        // Phase flow:
-        //   WAITING  → agent greeting, system calibrates to ambient noise
-        //   ENROLLING → user speaks, system learns user's voiceprint (2 chunks)
-        //   LOCKED  → only user's voice passes, background noise/other speakers rejected
-        this._voiceLock = new SpeakerVoiceLock();
 
         try {
             // 1. Prime the player AudioContext during user-gesture
@@ -1113,12 +1106,12 @@ export class LiveAudioService {
 
         // Transcript of what the user said (enabled by inputAudioTranscription:{} in setup)
         const itx = sc.inputTranscription || sc.input_transcription;
-        if (itx?.text) this._emit('onTranscription', itx.text, true);
+        if (itx?.text && this._mode === 'chat') this._emit('onTranscription', itx.text, true);
 
         // Transcript of what the agent said (enabled by outputAudioTranscription:{} in setup)
         const otx = sc.outputTranscription || sc.output_transcription;
         if (otx?.text) {
-            this._emit('onTranscription', otx.text, false);
+            if (this._mode === 'chat') this._emit('onTranscription', otx.text, false);
             // Detect [END_CALL] signal from agent
             if (otx.text.includes('[END_CALL]')) {
                 console.log('[LA] Agent confirmed call end');
@@ -1132,7 +1125,7 @@ export class LiveAudioService {
         this._live = false;
         this._stopMic();
         this._player.close();
-        if (this._micCtx) { try { this._micCtx.close(); } catch(_){} this._micCtx = null; }
+        // Don't close shared AudioContext - it's reused across calls
         if (this._ws) { try { this._ws.close(1000,'bye'); } catch(_){} this._ws = null; }
         this._emit('onClose');
     }
@@ -1145,68 +1138,10 @@ export class LiveAudioService {
 
     // ── Voice lock (MFCC-based speaker verification) ──────────────────────────
 
-    /** Get current voice lock info for UI */
-    get voiceLockInfo() {
-        return this._voiceLock ? this._voiceLock.info : null;
-    }
-
-    _processAudio(f32) {
-        // Voice lock enabled — speaker verification + interruption detection
-        if (!this._voiceLock) return f32;
-
-        try {
-            // Feed audio chunk to voice lock for speaker verification
-            const result = this._voiceLock.process(f32);
-            const info = result.info || {};
-            
-            // Log state transitions for debugging
-            if (info.state && info.state !== this._lastVoiceLockPhase) {
-                console.log(`[VL] State: ${info.state}`, info);
-                this._lastVoiceLockPhase = info.state;
-            }
-            
-            // If LOCKED and verified speech (action === 'pass'), interrupt agent
-            if (info.state === 'LOCKED' && result.action === 'pass' && !this._voiceLocked) {
-                this._voiceLocked = true;
-                console.log('[LA] 🔒 Speaker LOCKED + Verified speech → interrupting agent');
-                console.log('[VL] Lock details:', { threshold: info.threshold, similarity: info.similarity });
-                // Send interruption to Gemini
-                this._send({ clientContent: { turnComplete: true } });
-                // Stop agent audio playback immediately
-                this._playing = false;
-                this._turnInterrupted = true;
-                this._player.stop();
-                this._emit('onInterrupted');
-            }
-            
-            // If LOCKED but non-verified audio (action === 'gate'), filter it out
-            if (info.state === 'LOCKED' && result.action === 'gate') {
-                // Voice lock already returns silence for non-verified audio
-                // Just track that we're still locked but didn't hear verified speech
-            }
-            
-            // If silence detected (action === 'silence'), allow unlock for next turn
-            if (result.action === 'silence' && info.state === 'LOCKED') {
-                this._voiceLocked = false;
-            }
-            
-            // Return filtered audio (voice lock gates background noise)
-            return result.audio;
-        } catch (e) {
-            console.warn('[LA] voice lock error:', e);
-            // Fallback: pass audio through on error
-            return f32;
-        }
-    }
 
     // ── Mic ───────────────────────────────────────────────────────────────────
 
     async _startMic() {
-        this._stream = await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount:1, sampleRate:MIC_SAMPLE_RATE,
-                     echoCancellation:true, noiseSuppression:true, autoGainControl:true }
-        });
-
         // Reuse shared AudioContext across calls to avoid recreation latency
         const C = window.AudioContext || window.webkitAudioContext;
         if (!LiveAudioService._sharedMicCtx) {
@@ -1217,32 +1152,46 @@ export class LiveAudioService {
         
         if (this._micCtx.state === 'suspended') await this._micCtx.resume();
 
-        // Load worklet only once, then reuse across calls
+        // Load worklet module only once
         if (!LiveAudioService._sharedWorkletLoaded) {
             const blob = new Blob([WORKLET], { type:'application/javascript' });
             const burl = URL.createObjectURL(blob);
             try { 
                 await this._micCtx.audioWorklet.addModule(burl);
                 LiveAudioService._sharedWorkletLoaded = true;
-                LiveAudioService._sharedWorkletUrl = burl;
-                console.log('[LA] Loaded worklet module');
-            } finally { 
-                // Keep the URL for potential cleanup later if needed
+                console.log('[LA] Worklet module loaded');
+            } catch (e) {
+                console.error('[LA] Worklet load error:', e);
+                throw e;
             }
         }
 
-        const src = this._micCtx.createMediaStreamSource(this._stream);
-        this._worklet = new AudioWorkletNode(this._micCtx, 'cap');
+        // Get fresh media stream each call
+        if (!this._stream) {
+            this._stream = await navigator.mediaDevices.getUserMedia({
+                audio: { channelCount:1, sampleRate:MIC_SAMPLE_RATE,
+                         echoCancellation:true, noiseSuppression:true, autoGainControl:true }
+            });
+        }
 
+        // Create source from stream each call (reuse worklet node to prevent listener accumulation)
+        if (!this._source) {
+            this._source = this._micCtx.createMediaStreamSource(this._stream);
+        }
+
+        // Create worklet node ONCE and reuse across calls (KEY FIX FOR LATENCY)
+        if (!LiveAudioService._sharedWorklet) {
+            LiveAudioService._sharedWorklet = new AudioWorkletNode(this._micCtx, 'cap');
+            console.log('[LA] Created shared AudioWorkletNode');
+        }
+        this._worklet = LiveAudioService._sharedWorklet;
+
+        // Replace the listener with a new one for this call (don't accumulate listeners)
         this._worklet.port.onmessage = (ev) => {
             if (this._micCtx?.state === 'suspended') this._micCtx.resume();
             if (!this._live || this._muted || this._ws?.readyState !== WebSocket.OPEN) return;
 
-            // Process audio through voice lock for speaker verification + interruption
-            const processedAudio = this._processAudio(ev.data);
-            if (!processedAudio) return; // Voice lock filtered out
-
-            const chunk = new Uint8Array(f32ToI16(processedAudio).buffer);
+            const chunk = new Uint8Array(f32ToI16(ev.data).buffer);
             this._send({
                 realtimeInput: {
                     mediaChunks: [{ mimeType:`audio/pcm;rate=${MIC_SAMPLE_RATE}`, data:toB64(chunk) }]
@@ -1250,11 +1199,11 @@ export class LiveAudioService {
             });
         };
 
-        // Keepalive: send a silent chunk every 8s so the WS never idles out
+        // Keepalive: send a silent chunk every 8s
         this._keepalive = setInterval(() => {
             if (!this._live || this._ws?.readyState !== WebSocket.OPEN) return;
             if (this._micCtx?.state === 'suspended') this._micCtx.resume();
-            const silence = new Uint8Array(256); // ~8ms of silence @ 16kHz PCM16
+            const silence = new Uint8Array(256);
             this._send({
                 realtimeInput: {
                     mediaChunks: [{ mimeType:`audio/pcm;rate=${MIC_SAMPLE_RATE}`, data:toB64(silence) }]
@@ -1262,7 +1211,11 @@ export class LiveAudioService {
             });
         }, 8000);
 
-        src.connect(this._worklet);
+        // Connect source to worklet only once
+        if (!this._source._connected) {
+            this._source.connect(this._worklet);
+            this._source._connected = true;
+        }
         console.log('[LA] mic started');
     }
 

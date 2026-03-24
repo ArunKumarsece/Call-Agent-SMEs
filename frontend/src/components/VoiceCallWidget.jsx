@@ -6,6 +6,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
     const [connected, setConnected] = useState(false);
     const [connecting, setConnecting] = useState(false);
     const [muted, setMuted] = useState(false);
+    const [mode, setMode] = useState('chat');  // 'voice' or 'chat'
     const [messages, setMessages] = useState([]);
     const [status, setStatus] = useState('Click the phone button to start');
     const [textInput, setTextInput] = useState('');
@@ -47,6 +48,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
         if (connected || connecting) return;
         setConnecting(true);
         setStatus('Connecting...');
+        setMessages([]);
 
         const service = new LiveAudioService();
         liveServiceRef.current = service;
@@ -63,7 +65,9 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                 setConnected(true);
                 setConnecting(false);
                 setStatus('🟢 Live');
-                addMessage('system', `Connected to ${agentName}`);
+                if (mode === 'chat') {
+                    addMessage('system', `Connected to ${agentName}`);
+                }
                 userTranscriptRef.current = '';
                 agentTranscriptRef.current = '';
             },
@@ -72,20 +76,24 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                 setConnecting(false);
                 setMuted(false);
                 setStatus('Ended');
-                addMessage('system', 'Disconnected');
+                if (mode === 'chat') {
+                    addMessage('system', 'Disconnected');
+                }
             },
             onError: (e) => {
                 console.error('Error:', e);
                 setConnected(false);
                 setConnecting(false);
                 setStatus(`Error: ${e?.message || 'Failed'}`);
-                addMessage('system', `⚠️ ${e?.message}`);
+                if (mode === 'chat') {
+                    addMessage('system', `⚠️ ${e?.message}`);
+                }
             },
             onInterrupted: () => {
                 setStatus('⚡ Interrupted');
             },
             onTranscription: (text, isUser) => {
-                if (!text || !text.trim()) return;
+                if (!text || !text.trim() || mode !== 'chat') return;
 
                 if (isUser) {
                     if (userTranscriptRef.current === '') {
@@ -109,7 +117,7 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                     setStatus('🗣️ Speaking');
                 }
             },
-        });
+        }, { mode });
 
         if (!success) {
             setConnecting(false);
@@ -170,30 +178,60 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                         {connected ? '🟢 Live' : connecting ? '🟡 Connecting' : '⚪ Ready'}
                     </span>
                 </div>
-                {connected && (
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                        <button className={`btn btn-sm ${muted ? 'btn-warning' : 'btn-secondary'}`} onClick={toggleMute}>
-                            {muted ? '🔇' : '🎤'}
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    {/* Mode Toggle */}
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                        <button 
+                            className={`btn btn-sm ${mode === 'voice' ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setMode('voice')}
+                            disabled={connected}
+                            title="Voice mode - agent speaks, no transcription"
+                        >
+                            🎤 Voice
                         </button>
-                        <button className="btn btn-danger btn-sm" onClick={endCall}>
-                            End
+                        <button 
+                            className={`btn btn-sm ${mode === 'chat' ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setMode('chat')}
+                            disabled={connected}
+                            title="Chat mode - type messages, agent speaks responses"
+                        >
+                            💬 Chat
                         </button>
                     </div>
-                )}
+                    {connected && (
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                            <button className={`btn btn-sm ${muted ? 'btn-warning' : 'btn-secondary'}`} onClick={toggleMute}>
+                                {muted ? '🔇' : '🎤'}
+                            </button>
+                            <button className="btn btn-danger btn-sm" onClick={endCall}>
+                                End
+                            </button>
+                        </div>
+                    )}
+                </div>
             </div>
 
             <div className="voice-widget-body">
                 <div className="voice-widget-messages">
-                    {messages.length === 0 && (
+                    {messages.length === 0 && mode === 'chat' && (
                         <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px' }}>
-                            <div style={{ fontSize: '2rem', marginBottom: '12px' }}>🎙️</div>
-                            <p>Click the phone button to start</p>
+                            <div style={{ fontSize: '2rem', marginBottom: '12px' }}>💬</div>
+                            <p>Type messages or click the phone button to talk</p>
                             <p style={{ fontSize: '12px', marginTop: '8px' }}>
-                                VAD + Speaker Lock + Low Latency
+                                Fast response time, no latency
                             </p>
                         </div>
                     )}
-                    {messages.map((msg, i) => (
+                    {messages.length === 0 && mode === 'voice' && (
+                        <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px' }}>
+                            <div style={{ fontSize: '2rem', marginBottom: '12px' }}>🎙️</div>
+                            <p>Click the phone button to start voice call</p>
+                            <p style={{ fontSize: '12px', marginTop: '8px' }}>
+                                Real-time voice interaction, no text shown
+                            </p>
+                        </div>
+                    )}
+                    {mode === 'chat' && messages.map((msg, i) => (
                         <div key={i} className={`voice-message ${msg.role === 'user' ? 'user' : 'agent'}`}
                             style={msg.role === 'system' ? { alignSelf: 'center', background: 'rgba(108,99,255,0.1)', border: '1px solid var(--border-color)', fontSize: '12px', color: 'var(--text-secondary)', maxWidth: '100%' } : {}}>
                             {msg.text}
@@ -213,10 +251,12 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                     {connecting && <button className="mic-btn" disabled style={{ opacity: 0.6 }}>⏳</button>}
                 </div>
 
-                <form className="voice-text-input" onSubmit={handleTextSubmit}>
-                    <input value={textInput} onChange={e => setTextInput(e.target.value)} placeholder={connected ? "Type..." : "Message..."} />
-                    <button type="submit" className="btn btn-primary btn-sm">Send</button>
-                </form>
+                {mode === 'chat' && (
+                    <form className="voice-text-input" onSubmit={handleTextSubmit}>
+                        <input value={textInput} onChange={e => setTextInput(e.target.value)} placeholder={connected ? "Type..." : "Message..."} />
+                        <button type="submit" className="btn btn-primary btn-sm">Send</button>
+                    </form>
+                )}
             </div>
         </div>
     );

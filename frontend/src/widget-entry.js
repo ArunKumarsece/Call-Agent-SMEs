@@ -238,6 +238,10 @@ console.log('[AgentWidget] Loading widget with Live API support...');
         <div class="aw-header-title">${TITLE}</div>
         <div class="aw-header-sub">${SUBTITLE}</div>
       </div>
+      <div style="display: flex; gap: 8px;">
+        <button id="aw-mode-voice" class="aw-mode-btn active" style="font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(108,99,255,0.3); background: rgba(108,99,255,0.1); color: inherit; cursor: pointer;">🎤 Voice</button>
+        <button id="aw-mode-chat" class="aw-mode-btn" style="font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(108,99,255,0.2); background: transparent; color: inherit; cursor: pointer;">💬 Chat</button>
+      </div>
       <button class="aw-close" id="aw-close">✕</button>
     </div>
     <div class="aw-messages" id="aw-messages"></div>
@@ -245,7 +249,7 @@ console.log('[AgentWidget] Loading widget with Live API support...');
     <div class="aw-controls">
       <button class="aw-mic" id="aw-mic">🎤</button>
     </div>
-    <div class="aw-input-row">
+    <div class="aw-input-row" id="aw-input-row" style="display: none;">
       <input type="text" id="aw-text-input" placeholder="Or type a message..." />
       <button id="aw-text-send">Send</button>
     </div>
@@ -258,12 +262,16 @@ console.log('[AgentWidget] Loading widget with Live API support...');
     const closeBtn = document.getElementById('aw-close');
     const textInput = document.getElementById('aw-text-input');
     const textSend = document.getElementById('aw-text-send');
+    const inputRow = document.getElementById('aw-input-row');
+    const modeVoiceBtn = document.getElementById('aw-mode-voice');
+    const modeChatBtn = document.getElementById('aw-mode-chat');
 
     // ─── State ──────────────────────────────────────────
     let liveService = null;
     let isConnected = false;
     let isConnecting = false;
     let agentConfig = null;
+    let widgetMode = 'voice';  // 'voice' or 'chat'
 
     // Transcript accumulators
     let userTranscript = '';
@@ -285,6 +293,34 @@ console.log('[AgentWidget] Loading widget with Live API support...');
     textSend.addEventListener('click', sendTextMessage);
     textInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') sendTextMessage();
+    });
+
+    // Mode toggle listeners
+    modeVoiceBtn.addEventListener('click', () => {
+        if (isConnected) return;  // Can't change mode while connected
+        widgetMode = 'voice';
+        modeVoiceBtn.classList.add('active');
+        modeVoiceBtn.style.background = 'rgba(108,99,255,0.1)';
+        modeVoiceBtn.style.border = '1px solid rgba(108,99,255,0.3)';
+        modeChatBtn.classList.remove('active');
+        modeChatBtn.style.background = 'transparent';
+        modeChatBtn.style.border = '1px solid rgba(108,99,255,0.2)';
+        messagesEl.innerHTML = '';
+        inputRow.style.display = 'none';
+        statusEl.textContent = 'Click the mic to talk (voice mode)';
+    });
+
+    modeChatBtn.addEventListener('click', () => {
+        if (isConnected) return;  // Can't change mode while connected
+        widgetMode = 'chat';
+        modeChatBtn.classList.add('active');
+        modeChatBtn.style.background = 'rgba(108,99,255,0.1)';
+        modeChatBtn.style.border = '1px solid rgba(108,99,255,0.3)';
+        modeVoiceBtn.classList.remove('active');
+        modeVoiceBtn.style.background = 'transparent';
+        modeVoiceBtn.style.border = '1px solid rgba(108,99,255,0.2)';
+        messagesEl.innerHTML = '';
+        statusEl.textContent = 'Chat mode - type or use mic';
     });
 
     // ─── Helper Functions ───────────────────────────────
@@ -354,7 +390,13 @@ console.log('[AgentWidget] Loading widget with Live API support...');
                 micBtn.innerHTML = '⏹️';
                 micBtn.classList.add('recording');
                 statusEl.textContent = '🟢 Live — Listening...';
-                addMsg('system', `Connected to ${agentConfig.name}`);
+                if (widgetMode === 'chat') {
+                    addMsg('system', `Connected to ${agentConfig.name}`);
+                    inputRow.style.display = 'flex';
+                } else {
+                    messagesEl.innerHTML = '';  // Clear messages in voice mode
+                    inputRow.style.display = 'none';
+                }
                 userTranscript = '';
                 agentTranscript = '';
             },
@@ -364,7 +406,9 @@ console.log('[AgentWidget] Loading widget with Live API support...');
                 micBtn.innerHTML = '🎤';
                 micBtn.classList.remove('recording');
                 statusEl.textContent = 'Call ended';
-                addMsg('system', 'Call disconnected');
+                if (widgetMode === 'chat') {
+                    addMsg('system', 'Call disconnected');
+                }
                 liveService = null;
             },
             onError: (e) => {
@@ -374,14 +418,16 @@ console.log('[AgentWidget] Loading widget with Live API support...');
                 micBtn.innerHTML = '🎤';
                 micBtn.classList.remove('recording');
                 statusEl.textContent = 'Error';
-                addMsg('system', `⚠️ ${e?.message || 'Connection error'}`);
+                if (widgetMode === 'chat') {
+                    addMsg('system', `⚠️ ${e?.message || 'Connection error'}`);
+                }
                 liveService = null;
             },
             onInterrupted: () => {
                 statusEl.textContent = '⚡ Interrupted — Listening...';
             },
             onTranscription: (text, isUser) => {
-                if (!text || !text.trim()) return;
+                if (!text || !text.trim() || widgetMode !== 'chat') return;
 
                 if (isUser) {
                     if (userTranscript === '') {
@@ -405,7 +451,7 @@ console.log('[AgentWidget] Loading widget with Live API support...');
                     statusEl.textContent = '🗣️ Agent speaking...';
                 }
             }
-        });
+        }, { mode: widgetMode });
 
         if (!success) {
             isConnecting = false;

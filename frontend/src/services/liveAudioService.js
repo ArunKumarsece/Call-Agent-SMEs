@@ -1066,14 +1066,9 @@ export class LiveAudioService {
                     responseModalities: ['AUDIO'],
                     speechConfig: {
                         voiceConfig: { prebuiltVoiceConfig: { voiceName: voice_id || 'Puck' } }
-                    },
-                    // Suppress internal chain-of-thought thinking tokens from being sent
-                    thinkingConfig: { includeThoughts: false },
+                    }
                 },
-                systemInstruction: { parts: [{ text: sys }] },
-                // Enable transcription of both sides so chat shows spoken words
-                inputAudioTranscription: {},
-                outputAudioTranscription: {},
+                systemInstruction: { parts: [{ text: sys }] }
             }
         });
 

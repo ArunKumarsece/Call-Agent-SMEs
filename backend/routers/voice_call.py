@@ -674,7 +674,8 @@ async def _process_user_turn(
             db=db,
             conversation_history=conversation_history,
             on_status=status_update,
-            on_audio_chunk=on_audio_chunk,\n            cancellation_token=cancellation_token,
+            on_audio_chunk=on_audio_chunk,
+            cancellation_token=cancellation_token,
         )
 
         response_text = result["response_text"]

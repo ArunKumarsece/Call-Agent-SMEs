@@ -1284,10 +1284,11 @@ body::before {
 .auth-panel { 
   position: relative; 
   z-index: 2; 
-  padding: clamp(2rem, 5vw, 3.5rem);
+  padding: clamp(1.5rem, 4vw, 3.5rem);
   display: flex;
   flex-direction: column;
   justify-content: center;
+  min-width: 0;
 }
 
 .auth-panel-brand { 
@@ -1296,7 +1297,7 @@ body::before {
 }
 
 .auth-brand-inner { 
-  max-width: 480px;
+  width: 100%;
   animation: fadeInUp 0.7s var(--ease-out);
 }
 
@@ -1310,13 +1311,13 @@ body::before {
 }
 
 .auth-brand-title {
-  font-size: clamp(1.8rem, 3.5vw, 2.2rem);
+  font-size: clamp(1.6rem, 3.2vw, 2.2rem);
   font-weight: 800;
   line-height: 1.35;
   letter-spacing: -0.02em;
   color: var(--text-primary);
   margin-bottom: var(--space-lg);
-  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .auth-brand-copy {
@@ -1325,7 +1326,6 @@ body::before {
   font-size: var(--font-sm); 
   line-height: 1.6;
   margin-bottom: var(--space-2xl);
-  word-break: break-word;
 }
 
 .auth-brand-points { 

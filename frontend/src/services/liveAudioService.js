@@ -1218,10 +1218,9 @@ export class LiveAudioService {
                 if (this._player) {
                     this._player.stop();
                 }
-                // Send interrupt
-                this._send({
-                    clientContent: { turnComplete: true }
-                });
+                // Send interrupt via empty turn (signals user is speaking)
+                // Don't send invalid turnComplete message
+                console.log('[LA] User interrupt triggered');
             } else if (!isSpeech) {
                 this._lastWasSpeech = false;
             }

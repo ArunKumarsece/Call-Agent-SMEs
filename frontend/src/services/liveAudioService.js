@@ -888,6 +888,13 @@ export class LiveAudioService {
         // Prevent _playing from being re-set after client-side interrupt
         this._turnInterrupted = false;
         this._keepalive = null;
+        // VAD for interruption detection
+        this._vadSilenceFrames = 0;
+        this._vadSpeechThreshold = 0.02;  // RMS threshold (adaptive)
+        this._vadLocked = false;  // True after user first speaks
+        this._vadConsecutiveSpeech = 0;  // Frames of speech to trigger interrupt
+        this._lastWasSpeech = false;  // Track previous frame state
+        this._speechStart = 0;  // Track speech start time
     }
 
     async connect(agentConfig, callbacks, options = {}) {
@@ -899,25 +906,17 @@ export class LiveAudioService {
         this._playing = false;
         this._kbContext = '';
         this._turnInterrupted = false;
+        this._userSpeakingStart = 0;  // Track speech start time for interruption
 
         try {
             // 1. Prime the player AudioContext during user-gesture
             this._player.prime();
             const API_BASE = getAPIBase();
 
-            // 2. Fetch KB context for this agent (so Live Audio has knowledge base data)
-            try {
-                const kbRes = await fetch(`${API_BASE}/agents/public/${agentConfig.id || ''}/kb-context`);
-                if (kbRes.ok) {
-                    const kbData = await kbRes.json();
-                    this._kbContext = kbData.context || '';
-                    console.log(`[LA] KB context loaded: ${this._kbContext.length} chars`);
-                }
-            } catch (e) {
-                console.warn('[LA] KB context fetch failed (non-fatal):', e.message);
-            }
+            // Skip blocking KB fetch — fetch asynchronously after WS connects
+            // This cuts ~300ms latency from connect time
 
-            // 3. Get key
+            // 2. Get Gemini key
             const r = await fetch(`${API_BASE}/gemini-key`);
             if (!r.ok) throw new Error('Cannot load Gemini key');
             const { key } = await r.json();
@@ -972,6 +971,14 @@ export class LiveAudioService {
                         // Safe to send greeting now
                         this._greet();
                         resolve();
+                        
+                        // Fetch KB context asynchronously in background (don't block)
+                        // This runs AFTER setupComplete, not before
+                        if (this._cfg.id) {
+                            this._fetchKBContextAsync().catch(e => {
+                                console.warn('[LA] Async KB fetch failed:', e.message);
+                            });
+                        }
                     } catch(e) {
                         reject(new Error('Mic: ' + e.message));
                     }
@@ -1142,6 +1149,13 @@ export class LiveAudioService {
     // ── Mic ───────────────────────────────────────────────────────────────────
 
     async _startMic() {
+        // Reset VAD state for new conversation
+        this._lastWasSpeech = false;
+        this._vadSilenceFrames = 0;
+        this._vadConsecutiveSpeech = 0;
+        this._vadLocked = false;
+        this._speechStart = 0;
+        
         // Reuse shared AudioContext across calls to avoid recreation latency
         const C = window.AudioContext || window.webkitAudioContext;
         if (!LiveAudioService._sharedMicCtx) {
@@ -1191,7 +1205,27 @@ export class LiveAudioService {
             if (this._micCtx?.state === 'suspended') this._micCtx.resume();
             if (!this._live || this._muted || this._ws?.readyState !== WebSocket.OPEN) return;
 
-            const chunk = new Uint8Array(f32ToI16(ev.data).buffer);
+            const f32Chunk = ev.data;
+            const chunk = new Uint8Array(f32ToI16(f32Chunk).buffer);
+            
+            // Interrupt detection: send interrupt on user speech
+            const isSpeech = this._detectSpeech(f32Chunk);
+            if (isSpeech && !this._lastWasSpeech) {
+                this._speechStart = Date.now();
+                this._lastWasSpeech = true;
+                console.log('[LA] Speech detected, stopping player');
+                // Immediately stop the agent response
+                if (this._player) {
+                    this._player.stop();
+                }
+                // Send interrupt
+                this._send({
+                    clientContent: { turnComplete: true }
+                });
+            } else if (!isSpeech) {
+                this._lastWasSpeech = false;
+            }
+            
             this._send({
                 realtimeInput: {
                     mediaChunks: [{ mimeType:`audio/pcm;rate=${MIC_SAMPLE_RATE}`, data:toB64(chunk) }]
@@ -1227,6 +1261,55 @@ export class LiveAudioService {
             // Don't null it out — let shared instance stay loaded
         }
         if (this._stream)  { this._stream.getTracks().forEach(t=>t.stop()); this._stream = null; }
+    }
+
+    /**
+     * Voice Activity Detection using RMS energy with adaptive threshold
+     * Returns true if speech is detected
+     */
+    _detectSpeech(f32Chunk) {
+        if (!f32Chunk || f32Chunk.length === 0) return false;
+
+        // Calculate RMS (energy) of the chunk
+        let sum = 0;
+        for (let i = 0; i < f32Chunk.length; i++) {
+            sum += f32Chunk[i] * f32Chunk[i];
+        }
+        const rms = Math.sqrt(sum / f32Chunk.length);
+
+        // Adaptive threshold: base level is 0.02, increase to 0.03 when speech is detected
+        const threshold = this._vadLocked ? this._vadSpeechThreshold * 1.5 : this._vadSpeechThreshold;
+        const isSpeech = rms > threshold;
+
+        if (isSpeech) {
+            this._vadSilenceFrames = 0;
+            this._vadConsecutiveSpeech++;
+        } else {
+            this._vadSilenceFrames++;
+            if (this._vadSilenceFrames > 20) { // ~2 seconds of silence
+                this._vadConsecutiveSpeech = 0;
+                this._vadLocked = false;
+            }
+        }
+
+        return isSpeech && this._vadConsecutiveSpeech >= 2; // Require 2 consecutive speech frames
+    }
+
+    // Fetch KB context asynchronously (non-blocking)
+    async _fetchKBContextAsync() {
+        try {
+            const API_BASE = getAPIBase();
+            const start = performance.now();
+            const kbRes = await fetch(`${API_BASE}/agents/public/${this._cfg.id}/kb-context`);
+            if (kbRes.ok) {
+                const kbData = await kbRes.json();
+                this._kbContext = kbData.context || '';
+                const elapsed = performance.now() - start;
+                console.log(`[LA] KB context loaded async in ${elapsed.toFixed(0)}ms: ${this._kbContext.length} chars`);
+            }
+        } catch (e) {
+            console.warn('[LA] Async KB context fetch failed:', e.message);
+        }
     }
 
     // Static cleanup method to reset AudioContext/Worklet if needed

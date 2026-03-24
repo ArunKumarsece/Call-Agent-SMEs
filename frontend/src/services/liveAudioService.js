@@ -895,6 +895,7 @@ export class LiveAudioService {
         this._vadConsecutiveSpeech = 0;  // Frames of speech to trigger interrupt
         this._lastWasSpeech = false;  // Track previous frame state
         this._speechStart = 0;  // Track speech start time
+        this._silenceRequired = 3;  // Frames of silence to trigger end-of-speech (300ms vs 2s)
     }
 
     async connect(agentConfig, callbacks, options = {}) {
@@ -1285,7 +1286,8 @@ export class LiveAudioService {
             this._vadConsecutiveSpeech++;
         } else {
             this._vadSilenceFrames++;
-            if (this._vadSilenceFrames > 20) { // ~2 seconds of silence
+            // OPTIMIZED: Reduce from 20 frames (~2s) to 3 frames (~300ms) for faster response
+            if (this._vadSilenceFrames > this._silenceRequired) {
                 this._vadConsecutiveSpeech = 0;
                 this._vadLocked = false;
             }

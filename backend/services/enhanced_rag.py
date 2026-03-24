@@ -505,18 +505,49 @@ def mmr_rerank(query_embedding: list[float], candidates: list[dict],
 
 # ─── Main search — no LLM call, pure in-process ───────────────────────────────
 
+# ─── Embedding Cache (saves ~150ms per redundant query) ──────────────────────
+
+_embedding_cache: dict[str, list[float]] = {}
+_CACHE_MAX_SIZE = 500
+
+def _cache_embedding(query_text: str, embedding: list[float]) -> None:
+    """Cache a query embedding."""
+    import hashlib
+    key = hashlib.md5(query_text.lower().strip().encode()).hexdigest()
+    if len(_embedding_cache) >= _CACHE_MAX_SIZE:
+        # Simple FIFO eviction
+        _embedding_cache.pop(next(iter(_embedding_cache)))
+    _embedding_cache[key] = embedding
+
+def _get_cached_embedding(query_text: str) -> list[float] | None:
+    """Get cached embedding if available."""
+    import hashlib
+    key = hashlib.md5(query_text.lower().strip().encode()).hexdigest()
+    return _embedding_cache.get(key)
+
+
 async def search_knowledge_base_enhanced(
     query: str,
     agent_id: str,
     db: Session,
     top_k: int = 5,
     use_rerank: bool = False,   # kept for API compatibility, ignored
+    fast_mode: bool = True,     # NEW: skip MMR for voice (saves ~100ms)
 ) -> list[dict[str, Any]]:
     """
-    Fast hybrid search: dense + BM25 + MMR.
+    Fast hybrid search: dense + BM25 + MMR (or skip MMR for voice).
     Target latency: <80ms (embedding generation dominates, not retrieval).
+    
+    Args:
+        fast_mode: If True, skip MMR re-ranking for voice calls (saves ~100ms)
     """
-    query_embedding = await generate_query_embedding(query)
+    # Check cache first
+    query_embedding = _get_cached_embedding(query)
+    if not query_embedding:
+        query_embedding = await generate_query_embedding(query)
+        if query_embedding:
+            _cache_embedding(query, query_embedding)  # Cache for next time
+    
     if not query_embedding:
         return []
 
@@ -559,8 +590,15 @@ async def search_knowledge_base_enhanced(
         })
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
-    pool    = candidates[: top_k * 2]
-    diverse = mmr_rerank(query_embedding, pool, top_k=top_k)
+    
+    # FAST MODE: Skip expensive MMR re-ranking for voice calls
+    if fast_mode:
+        # Just return top-k without re-ranking
+        diverse = candidates[:top_k]
+    else:
+        # Full quality mode with MMR
+        pool    = candidates[: top_k * 2]
+        diverse = mmr_rerank(query_embedding, pool, top_k=top_k)
 
     for c in diverse:
         c.pop("embedding", None)

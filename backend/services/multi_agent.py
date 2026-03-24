@@ -369,5 +369,114 @@ class MultiAgentOrchestrator:
         )
 
 
+# ─── UNIFIED AGENT (Collapses 5 Gemini calls → 1) ────────────────────────────
+
+async def unified_respond(
+    user_message: str,
+    kb_context: str,
+    agent_system_prompt: str,
+    agent_role: str,
+    conversation_history: list | None = None,
+) -> OrchestratorDecision:
+    """
+    Single Gemini call that returns response + intent + sentiment + language + escalation.
+    Replaces the 5-call multi-agent orchestrator.
+    
+    Latency: ~800ms (1 Gemini call) vs ~2,400ms (5 calls)
+    Savings: ~1,600ms per turn
+    """
+    conversation_history = conversation_history or []
+
+    # Build conversation history text
+    history_text = ""
+    if conversation_history:
+        history_text = "\n".join([
+            f"{msg['role'].upper()}: {msg['content']}"
+            for msg in conversation_history[-6:]  # Last 3 turns
+        ])
+
+    # Single unified system prompt
+    system_instruction = f"""You are {agent_role}. {agent_system_prompt}
+
+IMPORTANT INSTRUCTIONS:
+1. Respond conversationally in Tanglish (Tamil + English mix)
+2. Keep response concise (1-2 sentences for voice)
+3. Use provided KB context if relevant
+4. Return ONLY valid JSON in this exact format (NO markdown fences, NO extra text):
+{{
+  "response": "<your conversational response in Tanglish>",
+  "intent": "<greeting|question|complaint|booking|escalation|small_talk|technical|other>",
+  "sentiment": "<positive|neutral|negative>",
+  "language": "<tamil|english|tanglish>",
+  "escalate": false,
+  "confidence": 0.85
+}}
+
+Example Intent Values:
+- greeting: "Hi, how are you"
+- question: "What is the price"
+- complaint: "This is not working"
+- booking: "I want to book"
+- escalation: "I need a human"
+- small_talk: "Nice weather"
+- technical: "How does this work"
+
+Respond with ONLY the JSON object. No preamble."""
+
+    prompt_parts = []
+    
+    if kb_context:
+        prompt_parts.append(f"<KNOWLEDGE_BASE>\n{kb_context}\n</KNOWLEDGE_BASE>\n\n")
+    
+    if history_text:
+        prompt_parts.append(f"<CONVERSATION_HISTORY>\n{history_text}\n</CONVERSATION_HISTORY>\n\n")
+    
+    prompt_parts.append(f"<USER_MESSAGE>{user_message}</USER_MESSAGE>\n\nRespond with ONLY the JSON object (no markdown):")
+
+    try:
+        model = genai.GenerativeModel(CHAT_MODEL, system_instruction=system_instruction)
+        resp = model.generate_content("".join(prompt_parts))
+        
+        # Parse JSON response
+        response_text = resp.text.strip()
+        parsed = _safe_json(response_text)
+        
+        # Extract fields with defaults
+        final_response = parsed.get("response", "Sorry, I'm not sure how to answer that.")
+        intent = parsed.get("intent", "other")
+        sentiment = parsed.get("sentiment", "neutral")
+        language = parsed.get("language", "tanglish")
+        escalate = bool(parsed.get("escalate", False))
+        confidence = float(parsed.get("confidence", 0.7))
+
+        return OrchestratorDecision(
+            final_response=final_response,
+            intent=intent,
+            sentiment=sentiment,
+            should_escalate=escalate,
+            language_hint=language,
+            rag_used=bool(kb_context),
+            agents_invoked=["unified_agent"],  # Single agent now
+            confidence=confidence,
+            metadata={
+                "unified": True,
+                "single_call": True,
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"Unified agent error: {e}")
+        return OrchestratorDecision(
+            final_response="மன்னிக்கவும், I couldn't process that right now. Can you try again?",
+            intent="other",
+            sentiment="neutral",
+            should_escalate=False,
+            language_hint="tanglish",
+            rag_used=False,
+            agents_invoked=["unified_agent_fallback"],
+            confidence=0.3,
+        )
+
+
 # Module-level singleton
 orchestrator = MultiAgentOrchestrator()

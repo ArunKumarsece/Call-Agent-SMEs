@@ -4,16 +4,16 @@ import { useAuth } from '../context/AuthContext';
 
 export default function Login() {
     const { login } = useAuth();
-    const navigate  = useNavigate();
-    const [form,    setForm]    = useState({ email: '', password: '' });
-    const [error,   setError]   = useState('');
+    const navigate = useNavigate();
+    const [form, setForm] = useState({ email: '', password: '' });
+    const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
-    const [focusedField, setFocusedField] = useState(null);
 
     async function handleSubmit(e) {
         e.preventDefault();
-        setError(''); setLoading(true);
+        setError('');
+        setLoading(true);
         try {
             await login(form.email, form.password);
             navigate('/', { replace: true });
@@ -24,112 +24,90 @@ export default function Login() {
     }
 
     return (
-        <div className="auth-shell">
-            <div className="auth-backdrop">
-                <div className="auth-glow-1"></div>
-                <div className="auth-glow-2"></div>
+        <div className="login-page">
+            {/* Left Panel - Branding */}
+            <div className="login-brand-panel">
+                <div className="login-brand-content">
+                    <div className="login-brand-logo">
+                        <div className="logo-box"></div>
+                        <span>VoiceForge</span>
+                    </div>
+                    <h1>Build Call Agents That Sound Human</h1>
+                    <p>From onboarding scripts to multilingual support, launch reliable AI voice experiences in minutes.</p>
+                    <ul className="login-features">
+                        <li>Real-time voice interaction</li>
+                        <li>Knowledge-backed responses</li>
+                        <li>Production-ready widgets</li>
+                    </ul>
+                </div>
             </div>
 
-            <section className="auth-panel auth-panel-brand">
-                <div className="auth-brand-inner">
-                    <p className="auth-kicker">Voice Intelligence Suite</p>
-                    <h2 className="auth-brand-title">Build call agents that sound human and scale like software.</h2>
-                    <p className="auth-brand-copy">
-                        From onboarding scripts to multilingual support, VoiceForge helps teams launch reliable AI voice experiences in minutes.
-                    </p>
-                    
-                    <div className="auth-brand-points">
-                        <div className="auth-brand-point">
-                            <span className="auth-point-icon"></span>
-                            <span>Real-time voice interaction</span>
-                        </div>
-                        <div className="auth-brand-point">
-                            <span className="auth-point-icon"></span>
-                            <span>Knowledge-backed responses</span>
-                        </div>
-                        <div className="auth-brand-point">
-                            <span className="auth-point-icon"></span>
-                            <span>Deployment-ready SDK widgets</span>
-                        </div>
+            {/* Right Panel - Form */}
+            <div className="login-form-panel">
+                <div className="login-form-container">
+                    <div className="login-header">
+                        <h2>Welcome back</h2>
+                        <p>Sign in to your workspace</p>
                     </div>
-                </div>
-            </section>
 
-            <section className="auth-panel auth-panel-form">
-                <div className="auth-form-wrapper">
-                    <div className="auth-card-logo">
-                        <div className="auth-logo-icon"></div>
-                        <span className="auth-logo-text">VoiceForge AI</span>
-                    </div>
-                    
-                    <h1 className="auth-title">Welcome back</h1>
-                    <p className="auth-subtitle">Sign in to your company workspace</p>
+                    {error && (
+                        <div className="login-error">
+                            <span className="error-icon">⚠</span>
+                            <span>{error}</span>
+                        </div>
+                    )}
 
-                    {error && <div className="auth-error-box" role="alert">
-                        <span className="auth-error-icon"></span>
-                        <span>{error}</span>
-                    </div>}
-
-                    <form onSubmit={handleSubmit} className="auth-form">
-                        <div className="auth-field-group">
-                            <label className="auth-label">Email address</label>
-                            <div className="auth-input-wrapper">
-                                <input
-                                    className="auth-input"
-                                    type="email" autoComplete="email" required
-                                    placeholder="you@company.com"
-                                    value={form.email}
-                                    onChange={e => setForm(p => ({ ...p, email: e.target.value }))}
-                                    onFocus={() => setFocusedField('email')}
-                                    onBlur={() => setFocusedField(null)}
-                                />
-                                <div className="auth-input-focus-ring"></div>
-                            </div>
+                    <form onSubmit={handleSubmit}>
+                        <div className="form-group">
+                            <label>Email</label>
+                            <input
+                                type="email"
+                                placeholder="you@company.com"
+                                value={form.email}
+                                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                                required
+                                autoComplete="email"
+                            />
                         </div>
 
-                        <div className="auth-field-group">
-                            <label className="auth-label">Password</label>
-                            <div className="auth-input-wrapper auth-password-wrapper">
+                        <div className="form-group">
+                            <label>Password</label>
+                            <div className="password-field">
                                 <input
-                                    className="auth-input"
                                     type={showPassword ? 'text' : 'password'}
-                                    autoComplete="current-password" required
                                     placeholder="••••••••"
                                     value={form.password}
-                                    onChange={e => setForm(p => ({ ...p, password: e.target.value }))}
-                                    onFocus={() => setFocusedField('password')}
-                                    onBlur={() => setFocusedField(null)}
+                                    onChange={(e) => setForm({ ...form, password: e.target.value })}
+                                    required
+                                    autoComplete="current-password"
                                 />
                                 <button
                                     type="button"
-                                    className="auth-password-toggle"
+                                    className="toggle-password"
                                     onClick={() => setShowPassword(!showPassword)}
-                                    aria-label={showPassword ? 'Hide password' : 'Show password'}
                                 >
                                     {showPassword ? '✕' : '○'}
                                 </button>
-                                <div className="auth-input-focus-ring"></div>
                             </div>
                         </div>
 
-                        <button type="submit" className="auth-submit-btn" style={{ opacity: loading ? 0.7 : 1 }} disabled={loading}>
+                        <button type="submit" className="login-button" disabled={loading}>
                             {loading ? (
                                 <>
-                                    <span className="auth-btn-spinner"></span>
-                                    Signing in…
+                                    <span className="spinner"></span>
+                                    Signing in...
                                 </>
                             ) : (
-                                <>Sign in<span className="auth-btn-arrow">→</span></>
+                                <>Sign in</>
                             )}
                         </button>
                     </form>
 
-                    <p className="auth-switch-text">
-                        Don't have an account?{' '}
-                        <Link to="/register" className="auth-link">Create one free</Link>
-                    </p>
+                    <div className="login-footer">
+                        <span>Don't have an account? <Link to="/register">Create one</Link></span>
+                    </div>
                 </div>
-            </section>
+            </div>
         </div>
     );
 }

@@ -1273,7 +1273,6 @@ export class LiveAudioService {
                         if (this._lastWasSpeech === false && this._pendingTurnComplete) {
                             this._send({
                                 clientContent: {
-                                    turns: [{ role: 'user', parts: [{ text: '(user speech audio)', meta: { turnId: this._currentTurnId } }] }],
                                     turnComplete: true
                                 }
                             });

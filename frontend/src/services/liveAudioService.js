@@ -1209,23 +1209,35 @@ export class LiveAudioService {
             const f32Chunk = ev.data;
             const chunk = new Uint8Array(f32ToI16(f32Chunk).buffer);
             
-            // Interrupt detection: send interrupt on user speech
+            // Voice Activity Detection & Turn Management
             const isSpeech = this._detectSpeech(f32Chunk);
+            
+            // SPEECH START: User begins speaking
             if (isSpeech && !this._lastWasSpeech) {
                 this._speechStart = Date.now();
                 this._lastWasSpeech = true;
-                console.log('[LA] Speech detected, stopping player');
+                console.log('[LA] ✓ Speech detected - stopping agent playback');
                 // Immediately stop the agent response
                 if (this._player) {
                     this._player.stop();
                 }
-                // Send interrupt via empty turn (signals user is speaking)
-                // Don't send invalid turnComplete message
-                console.log('[LA] User interrupt triggered');
-            } else if (!isSpeech) {
+            } 
+            // SPEECH END: User stops speaking (silence after speech)
+            else if (!isSpeech && this._lastWasSpeech && this._vadSilenceFrames === 1) {
+                // Only on FIRST frame of silence (avoid repeated triggers)
+                const speechDuration = Date.now() - this._speechStart;
+                console.log(`[LA] ✓ User finished speaking (${speechDuration}ms). Sending turnComplete to close user turn...`);
+                // Send turnComplete to signal end of user input
+                this._send({
+                    clientContent: {
+                        turns: [{ role: 'user', parts: [{ text: '(user speech audio)' }] }],
+                        turnComplete: true
+                    }
+                });
                 this._lastWasSpeech = false;
             }
             
+            // Send audio chunk to Gemini Live
             this._send({
                 realtimeInput: {
                     mediaChunks: [{ mimeType:`audio/pcm;rate=${MIC_SAMPLE_RATE}`, data:toB64(chunk) }]

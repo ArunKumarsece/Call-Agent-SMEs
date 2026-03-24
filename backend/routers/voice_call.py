@@ -621,16 +621,20 @@ async def _process_user_turn(
     Ultra-fast pipeline: 1-2 second latency target.
     Concurrent STT + RAG, streaming TTS with Gemini Flash.
     """
+    
+    logger.info(f"[VOICE] >>> START user turn | agent={agent.name} | mode={'text' if user_text else 'audio'} | input_len={len(user_text) if user_text else len(audio_bytes)}")
 
     audio_chunks_queue = []  # Collect streaming audio chunks
 
     async def status_update(msg: str):
         """Send status updates to client."""
+        logger.debug(f"[VOICE] STATUS: {msg}")
         await _send(ws, {"type": "status", "text": msg})
 
     async def on_audio_chunk(chunk: bytes, text: str):
         """Called as TTS chunks are generated from streaming tokens."""
         audio_chunks_queue.append(chunk)
+        logger.debug(f"[VOICE] TTS_CHUNK: {len(chunk)}B from '{text[:30]}...'")
         # Send audio chunk immediately to client
         try:
             await _send(ws, {
@@ -639,10 +643,11 @@ async def _process_user_turn(
                 "text": text,
             })
         except Exception as e:
-            logger.warning(f"Failed to send audio chunk: {e}")
+            logger.warning(f"[VOICE] Failed to send audio chunk: {e}")
 
     # ── Use ultra-fast pipeline ────────────────────────────────────
     try:
+        logger.info("[VOICE] Calling ultra_fast_pipeline.process_user_turn()")
         result = await ultra_fast_pipeline.process_user_turn(
             audio_bytes=audio_bytes if not user_text else b"",
             user_text=user_text,
@@ -660,11 +665,13 @@ async def _process_user_turn(
         context = result["rag_context"]
         decision = result["decision"]
         latencies = result["latencies"]
+        
+        logger.info(f"[VOICE] ✓ Pipeline complete | response={len(response_text)}chars | latencies_ms={latencies}")
 
     except Exception as e:
         import traceback
-        traceback.print_exc()
-        logger.error(f"Pipeline error: {e}")
+        tb = traceback.format_exc()
+        logger.error(f"[VOICE] ✗ Pipeline error: {e}\n{tb}")
         response_text = "Sorry, I encountered an error. Please try again."
         tts_bytes = await text_to_speech(response_text, agent.voice_id or "Puck")
         transcript = user_text or ""
@@ -680,9 +687,11 @@ async def _process_user_turn(
     # ── Update conversation history ─────────────────────────────────
     conversation_history.append({"role": "user", "content": transcript})
     conversation_history.append({"role": "assistant", "content": response_text})
+    logger.debug(f"[VOICE] History: user_input={transcript[:50]}... | depth={len(conversation_history)}")
 
     # ── Send agent decision ─────────────────────────────────────────
     if decision:
+        logger.info(f"[VOICE] Decision: intent={decision.intent} | sentiment={decision.sentiment} | escalate={decision.should_escalate} | conf={decision.confidence}")
         await _send(ws, {
             "type": "agent_decision",
             "data": {
@@ -697,6 +706,7 @@ async def _process_user_turn(
         })
 
         if decision.should_escalate:
+            logger.warning(f"[VOICE] ⚠️ ESCALATION for {agent.name}")
             await _send(ws, {"type": "escalation", "text": "⚠️ Connecting you to a human agent..."})
 
     # ── Send final response and latencies ────────────────────────────
@@ -715,21 +725,29 @@ async def _process_user_turn(
 
     # If we haven't already streamed audio chunks, send complete TTS now
     if not audio_chunks_queue and tts_bytes:
+        logger.debug(f"[VOICE] Sending complete TTS ({len(tts_bytes)}B)")
         await _send(ws, {
             "type": "audio",
             "data": base64.b64encode(tts_bytes).decode("utf-8"),
             "text": response_text,
         })
+    else:
+        logger.debug(f"[VOICE] TTS streamed in {len(audio_chunks_queue)} chunks")
 
     await _send(ws, {"type": "agent_speaking_end"})
     await _send(ws, {"type": "listening"})
     await _send(ws, {"type": "status", "text": "Listening... speak now"})
+    
+    logger.info(f"[VOICE] <<< TURN_END agent={agent.name} | transcript='{transcript[:40]}...' | response_chars={len(response_text)} | total_latency_ms={latencies.get('total_ms', 0)}")
 
 
 @router.websocket("/ws/call/{agent_id}")
 async def voice_call(websocket: WebSocket, agent_id: str, token: str = Query(default="")):
     await websocket.accept()
     db = SessionLocal()
+    connection_id = f"{agent_id[:8]}_{id(websocket)%1000}"  # Unique ID for this connection
+    
+    logger.info(f"[WS] ↔️ CONNECT | connection={connection_id}")
 
     try:
         # ── Auth: validate Bearer token passed as query param ──────
@@ -740,9 +758,11 @@ async def voice_call(websocket: WebSocket, agent_id: str, token: str = Query(def
                 if payload.get("type") == "access":
                     company_id = payload.get("sub")
             except JWTError:
+                logger.warning(f"[WS] Auth failed for connection {connection_id}")
                 pass
 
         if not company_id:
+            logger.error(f"[WS] ✗ Unauthorized | connection={connection_id}")
             await _send(websocket, {"type": "error", "text": "Unauthorized"})
             await websocket.close(code=4001)
             return
@@ -752,18 +772,24 @@ async def voice_call(websocket: WebSocket, agent_id: str, token: str = Query(def
             Agent.company_id == company_id
         ).first()
         if not agent:
+            logger.error(f"[WS] ✗ Agent {agent_id} not found")
             await _send(websocket, {"type": "error", "text": "Agent not found"})
             await websocket.close()
             return
 
+        logger.info(f"[WS] ✓ Auth passed | agent={agent.name} | connection={connection_id}")
+        
         conversation_history: list[dict] = []
         audio_buffer = b""
         agent_is_speaking = False   # track whether agent TTS is in progress
+        turn_count = 0
 
         # ── Step 1: Agent speaks first ────────────────────────────
+        logger.info(f"[WS] Agent greeting starting for {agent.name}")
         await _agent_greet_and_speak(websocket, agent, conversation_history)
 
         # ── Step 2: Main loop ─────────────────────────────────────
+        logger.info(f"[WS] Entering main message loop")
         while True:
             try:
                 raw = await asyncio.wait_for(
@@ -771,18 +797,23 @@ async def voice_call(websocket: WebSocket, agent_id: str, token: str = Query(def
                 )
                 msg = json.loads(raw)
                 msg_type = msg.get("type", "")
+                logger.debug(f"[WS] ↓ Received {msg_type} | connection={connection_id}")
 
                 if msg_type == "audio_chunk":
                     # Accumulate mic chunks (VAD handled on client)
                     data = msg.get("data", "")
                     if data:
+                        chunk_size = len(base64.b64decode(data))
                         audio_buffer += base64.b64decode(data)
+                        logger.debug(f"[WS] Audio chunk received: {chunk_size}B | total_buffered={len(audio_buffer)}B")
 
                 elif msg_type == "end_of_speech":
                     # VAD detected end of user speech → process immediately
                     full_b64 = msg.get("fullAudio", "")
                     audio_for_stt = base64.b64decode(full_b64) if full_b64 else audio_buffer
                     audio_buffer = b""
+                    turn_count += 1
+                    logger.info(f"[WS] end_of_speech detected | turn={turn_count} | audio_len={len(audio_for_stt)}B")
 
                     if len(audio_for_stt) < 500:
                         await _send(websocket, {"type": "listening"})
@@ -801,6 +832,8 @@ async def voice_call(websocket: WebSocket, agent_id: str, token: str = Query(def
                     user_text = msg.get("text", "").strip()
                     if not user_text:
                         continue
+                    turn_count += 1
+                    logger.info(f"[WS] Text input | turn={turn_count} | text='{user_text[:50]}...'")
                     await _send(websocket, {"type": "transcript", "text": user_text})
                     # Pass empty audio bytes for text-only input
                     await _process_user_turn(
@@ -810,21 +843,29 @@ async def voice_call(websocket: WebSocket, agent_id: str, token: str = Query(def
 
                 elif msg_type == "interrupt":
                     # User interrupted agent — stop speaking, start listening
+                    logger.debug(f"[WS] User interrupt | connection={connection_id}")
                     await _send(websocket, {"type": "agent_speaking_end"})
                     await _send(websocket, {"type": "listening"})
                     await _send(websocket, {"type": "status", "text": "Go ahead, I'm listening..."})
 
                 elif msg_type == "ping":
+                    logger.debug(f"[WS] Ping | connection={connection_id}")
                     await _send(websocket, {"type": "pong"})
 
             except asyncio.TimeoutError:
+                logger.warning(f"[WS] ⏱️ Timeout (300s inactivity) | connection={connection_id}")
                 await _send(websocket, {"type": "status", "text": "Call timed out due to inactivity."})
                 break
 
     except WebSocketDisconnect:
-        print(f"WebSocket disconnected for agent {agent_id}")
+        logger.info(f"[WS] ↔️ DISCONNECT | agent={agent_id if 'agent' in locals() else 'unknown'} | turns={turn_count if 'turn_count' in locals() else 0}")
     except Exception as e:
+        logger.error(f"[WS] ✗ Exception | agent={agent_id if 'agent' in locals() else 'unknown'} | error={str(e)}")
         traceback.print_exc()
-        await _send(websocket, {"type": "error", "text": str(e)})
+        try:
+            await _send(websocket, {"type": "error", "text": str(e)})
+        except:
+            pass
     finally:
         db.close()
+        logger.info(f"[WS] Cleanup complete for {agent_id}")

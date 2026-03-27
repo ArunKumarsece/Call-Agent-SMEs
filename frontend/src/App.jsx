@@ -84,43 +84,42 @@ function PrivateRoute({ children }) {
 function Navbar() {
     const location        = useLocation();
     const { company, logout } = useAuth();
-    const isAuth = !!company;
+    if (!company) return null;
 
-    if (!isAuth) return null;
-
-    const PLAN_BADGE = { free: '#94a3b8', pro: '#6c63ff', enterprise: '#f59e0b' };
+    const titles = {
+        '/': 'Dashboard',
+        '/analytics': 'Analytics',
+        '/calls': 'Call History',
+        '/billing': 'Billing',
+        '/settings': 'Settings',
+        '/agents/new': 'Create Agent',
+    };
 
     let pageTitle = 'Dashboard';
-    if (location.pathname.startsWith('/agents/new')) pageTitle = 'Create Agent';
-    else if (location.pathname.startsWith('/agents/') && location.pathname.endsWith('/edit')) pageTitle = 'Edit Agent';
-    else if (location.pathname.startsWith('/agents/')) pageTitle = 'Agent Detail';
-    else if (location.pathname.startsWith('/analytics')) pageTitle = 'Analytics';
-    else if (location.pathname.startsWith('/calls')) pageTitle = 'Call History';
-    else if (location.pathname.startsWith('/billing')) pageTitle = 'Billing';
-    else if (location.pathname.startsWith('/settings')) pageTitle = 'Settings';
+    if (location.pathname.endsWith('/edit')) pageTitle = 'Edit Agent';
+    else if (location.pathname.startsWith('/agents/') && location.pathname !== '/agents/new') pageTitle = 'Agent Detail';
+    else pageTitle = titles[location.pathname] || 'VoiceForge AI';
+
+    const PLAN_COLORS = { free: 'var(--text-muted)', pro: 'var(--accent)', enterprise: 'var(--amber)' };
 
     return (
         <nav className="navbar">
             <div className="navbar-title">{pageTitle}</div>
-
-            {/* Company pill */}
             <div className="navbar-actions">
                 <div className="company-pill">
                     <div className="company-pill-avatar">
-                        {company.logo_url ? <img src={company.logo_url} className="company-pill-logo" alt="" /> : <span style={{ fontWeight: 800, fontSize: 11 }}>{(company.company_name || 'C')[0].toUpperCase()}</span>}
+                        {company.logo_url
+                            ? <img src={company.logo_url} className="company-pill-logo" alt="" />
+                            : <span style={{ fontWeight: 800, fontSize: 11 }}>{(company.company_name || 'C')[0].toUpperCase()}</span>
+                        }
                     </div>
-                    <span className="company-pill-name">
-                        {company.company_name}
-                    </span>
-                    <span className="company-pill-plan" style={{ color: PLAN_BADGE[company.plan] || '#94a3b8' }}>
+                    <span className="company-pill-name">{company.company_name}</span>
+                    <span className="company-pill-plan" style={{ color: PLAN_COLORS[company.plan] || 'var(--text-muted)' }}>
                         {company.plan}
                     </span>
                 </div>
-                <button
-                    onClick={logout}
-                    className="btn btn-ghost btn-sm"
-                    title="Sign out"
-                >
+                <button onClick={logout} className="btn btn-ghost btn-sm" title="Sign out">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
                     Sign out
                 </button>
             </div>

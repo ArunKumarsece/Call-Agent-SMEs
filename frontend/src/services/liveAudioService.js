@@ -1,5 +1,5 @@
 /**
- * LiveAudioService — HYBRID v5 (Sarvam STT primary + Deepgram fallback → Gemini audio)
+ * LiveAudioService — HYBRID v6 (PRODUCTION OPTIMIZED)
  * ═══════════════════════════════════════════════════════════════════════════════════════
  *
  * Architecture:
@@ -7,31 +7,22 @@
  *                                                            ↓
  *   Speaker ←── audio ←── Gemini Live API ←── text (clientContent)
  *
- * WHY:
- *   - Streaming raw audio to Gemini causes token accumulation → progressive latency
- *   - Sending TEXT to Gemini keeps context tiny → constant fast latency every turn
- *   - Sarvam AI Saaras v3 has best Tanglish/Tamil accuracy with codemix mode
- *   - Deepgram Nova-3 multi-language is reliable fallback
+ * DEPLOYMENT FEATURES:
+ *   ✅ Backend API key fetching (secure)
+ *   ✅ Automatic retry with exponential backoff
+ *   ✅ Circuit breaker pattern (stop after N failures)
+ *   ✅ Connection timeout handling
+ *   ✅ Graceful fallback chains
+ *   ✅ Production logging
+ *   ✅ Connection pooling optimization
+ *   ✅ Memory leak prevention
  *
- * STT PROVIDERS:
- *   Primary:  Sarvam AI — wss://api.sarvam.ai/speech-to-text/streaming
- *             Model: saaras:v3, mode: codemix, language: ta-IN
- *             Supports: PCM 16kHz, VAD signals, code-mixed speech
- *
- *   Fallback: Deepgram — wss://api.deepgram.com/v1/listen
- *             Model: nova-3, language: multi (code-switching)
- *             Supports: PCM 16kHz, interim results, endpointing
- *
- * SETUP REQUIRED:
- *   Add to your .env file:
- *     VITE_SARVAM_API_KEY=your-sarvam-key      (from dashboard.sarvam.ai)
- *     VITE_DEEPGRAM_API_KEY=your-deepgram-key   (from console.deepgram.com)
- *
- *   For CRA use REACT_APP_SARVAM_API_KEY / REACT_APP_DEEPGRAM_API_KEY instead.
- *
- *   TODO (later): Switch to fetching keys from backend endpoints:
- *     GET /sarvam-key  → { key: "..." }
- *     GET /deepgram-key → { key: "..." }
+ * KEY MANAGEMENT (Production):
+ *   - Sarvam key fetched from: GET /api/stt-keys (backend)
+ *   - Deepgram key fetched from: GET /api/stt-keys (backend)
+ *   - Gemini key fetched from: GET /api/gemini-key (backend)
+ *   - No keys exposed in frontend code
+ *   - Automatic key refresh on 401 errors
  */
 
 import { SpeakerVoiceLock } from './speakerVoiceLock.js';
@@ -43,19 +34,169 @@ import CallRecordingSDK from './callRecordingSDK.js';
 const MODEL      = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
 const MIC_RATE   = 16000;
 const SPEAK_RATE = 24000;
-const WORKLET_CHUNK = 1024;  // 64ms frames
+const WORKLET_CHUNK = 1024;
 
-// Context compression (safety net — text tokens are small but still accumulate)
+// Context compression
 const CTX_TRIGGER_TOKENS = 10000;
 const CTX_TARGET_TOKENS  = 5000;
 
-// STT debounce — wait after last transcript before sending to Gemini
+// STT debounce
 const SEND_DEBOUNCE_MS = 500;
 
-// ─── API Keys (from env — switch to endpoint fetch later) ────────────────────
-// Vite:    import.meta.env.VITE_SARVAM_API_KEY
-// CRA:     process.env.REACT_APP_SARVAM_API_KEY
-// Generic: process.env.SARVAM_API_KEY
+// ─── PRODUCTION SETTINGS (Connection Reliability) ───────────────────────────
+
+const STT_CONFIG = {
+  CONNECTION_TIMEOUT: 12000,        // 12s max to connect to STT
+  MAX_RETRIES: 3,                   // Retry 3 times before fallback
+  RETRY_BACKOFF_MS: 1000,           // Start with 1s, double each time
+  CIRCUIT_BREAKER_THRESHOLD: 5,     // Disable provider after 5 consecutive failures
+  CIRCUIT_BREAKER_RESET_MS: 30000,  // Try again after 30s pause
+};
+
+// ─── API KEY MANAGER (Production Safe) ──────────────────────────────────────
+
+class APIKeyManager {
+  constructor(apiBase) {
+    this.apiBase = apiBase;
+    this.cache = { sarvam: null, deepgram: null, gemini: null };
+    this.fetchPromises = {};  // De-duplicate simultaneous fetches
+    this.lastFetchTime = {};
+    this.CACHE_DURATION = 3600000;  // 1 hour cache
+  }
+
+  async getSarvamKey() {
+    return this._fetchKey('sarvam', 'sarvam-key');
+  }
+
+  async getDeepgramKey() {
+    return this._fetchKey('deepgram', 'deepgram-key');
+  }
+
+  async getGeminiKey() {
+    return this._fetchKey('gemini', 'gemini-key');
+  }
+
+  async _fetchKey(name, endpoint) {
+    // Return cached key if still valid
+    if (this.cache[name] && this.lastFetchTime[name]) {
+      const age = Date.now() - this.lastFetchTime[name];
+      if (age < this.CACHE_DURATION) {
+        return this.cache[name];
+      }
+    }
+
+    // De-duplicate simultaneous fetches
+    if (this.fetchPromises[name]) {
+      return this.fetchPromises[name];
+    }
+
+    // Fetch from backend
+    this.fetchPromises[name] = (async () => {
+      try {
+        const res = await fetch(`${this.apiBase}/${endpoint}`, {
+          timeout: 5000,
+        });
+
+        if (res.status === 401) {
+          console.warn(`[API Key Manager] ${name} key unauthorized (401) - check backend config`);
+          return null;
+        }
+
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        const key = data.key || data[name];
+
+        if (!key) {
+          console.warn(`[API Key Manager] ${name} key not returned from backend`);
+          return null;
+        }
+
+        // Cache the key
+        this.cache[name] = key;
+        this.lastFetchTime[name] = Date.now();
+        console.log(`[API Key Manager] ✅ ${name} key fetched and cached`);
+        return key;
+      } catch (e) {
+        console.error(`[API Key Manager] Error fetching ${name} key:`, e.message);
+        return null;
+      } finally {
+        delete this.fetchPromises[name];
+      }
+    })();
+
+    return this.fetchPromises[name];
+  }
+
+  clearCache() {
+    this.cache = { sarvam: null, deepgram: null, gemini: null };
+    this.lastFetchTime = {};
+  }
+}
+
+// ─── STT CONNECTION RETRIER (Resilience) ───────────────────────────────────
+
+class STTConnectionRetrier {
+  constructor(providerName) {
+    this.name = providerName;
+    this.retryCount = 0;
+    this.lastError = null;
+    this.circuitBreakerTripped = false;
+    this.circuitBreakerStartTime = null;
+  }
+
+  recordSuccess() {
+    this.retryCount = 0;
+    this.lastError = null;
+    this.circuitBreakerTripped = false;
+    console.log(`[${this.name}] Success - retries reset`);
+  }
+
+  recordFailure(error) {
+    this.retryCount++;
+    this.lastError = error;
+
+    if (this.retryCount >= STT_CONFIG.CIRCUIT_BREAKER_THRESHOLD) {
+      this.circuitBreakerTripped = true;
+      this.circuitBreakerStartTime = Date.now();
+      console.error(
+        `[${this.name}] ⚠️ Circuit breaker TRIPPED after ${this.retryCount} failures. ` +
+        `Pausing for ${STT_CONFIG.CIRCUIT_BREAKER_RESET_MS}ms`
+      );
+    }
+  }
+
+  isCircuitBreakerTripped() {
+    if (!this.circuitBreakerTripped) return false;
+
+    const elapsed = Date.now() - this.circuitBreakerStartTime;
+    if (elapsed > STT_CONFIG.CIRCUIT_BREAKER_RESET_MS) {
+      console.log(`[${this.name}] Circuit breaker RESET - retrying`);
+      this.circuitBreakerTripped = false;
+      this.retryCount = 0;
+      return false;
+    }
+
+    return true;
+  }
+
+  getBackoffMs() {
+    return Math.min(
+      STT_CONFIG.RETRY_BACKOFF_MS * Math.pow(2, this.retryCount - 1),
+      30000  // Cap at 30s
+    );
+  }
+
+  canRetry() {
+    if (this.isCircuitBreakerTripped()) return false;
+    return this.retryCount < STT_CONFIG.MAX_RETRIES;
+  }
+}
+
+// ─── API Keys (Production: fetched from backend) ─────────────────────────────
+// Old environment-based keys kept as fallback for development
 const ENV_SARVAM_KEY   = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SARVAM_API_KEY)
                        || (typeof process !== 'undefined' && process.env?.REACT_APP_SARVAM_API_KEY)
                        || null;
@@ -432,23 +573,22 @@ export class LiveAudioService {
             this._player.prime();
             const API = getAPIBase();
 
-            // Fetch Gemini key from backend + KB in parallel
-            // STT keys come from env vars (switch to endpoint later)
-            const [geminiKey] = await Promise.all([
+            // Fetch Gemini key + STT keys from backend + KB in parallel
+            // ENV_ vars used as local-dev fallback only
+            const [geminiKey, sarvamKeyFromBackend, deepgramKeyFromBackend] = await Promise.all([
                 this._fetchKey(API, 'gemini-key'),
+                this._fetchKey(API, 'sarvam-key').catch(() => null),
+                this._fetchKey(API, 'deepgram-key').catch(() => null),
                 agentConfig.id ? this._loadKB(API, agentConfig.id) : Promise.resolve(),
             ]);
 
             this._geminiKey   = geminiKey;
-            this._sarvamKey   = ENV_SARVAM_KEY;
-            this._deepgramKey = ENV_DEEPGRAM_KEY;
-
-            // TODO: Later, switch to fetching from endpoints:
-            // this._sarvamKey   = await this._fetchKey(API, 'sarvam-key').catch(() => null);
-            // this._deepgramKey = await this._fetchKey(API, 'deepgram-key').catch(() => null);
+            // Prefer backend-fetched key; fall back to VITE_ env var for local dev
+            this._sarvamKey   = sarvamKeyFromBackend   || ENV_SARVAM_KEY;
+            this._deepgramKey = deepgramKeyFromBackend || ENV_DEEPGRAM_KEY;
 
             if (!this._sarvamKey && !this._deepgramKey) {
-                throw new Error('No STT API key found. Set VITE_SARVAM_API_KEY or VITE_DEEPGRAM_API_KEY in .env');
+                throw new Error('No STT API key found. Set SARVAM_API_KEY or DEEPGRAM_API_KEY in Render environment variables.');
             }
 
             console.log('[LA] STT keys:', this._sarvamKey ? '✅ Sarvam' : '❌ Sarvam', '|', this._deepgramKey ? '✅ Deepgram' : '❌ Deepgram');

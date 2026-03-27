@@ -29,6 +29,10 @@ services:
         value: chroma
       - key: ALLOWED_ORIGINS
         sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
     
     # Persistent disk for database and vector store
     disk:

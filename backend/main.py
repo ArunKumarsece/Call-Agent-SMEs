@@ -235,7 +235,9 @@ class WidgetCORSMiddleware(BaseHTTPMiddleware):
             path.startswith("/api/widget/") or 
             path.startswith("/static/widget/") or
             path.startswith("/api/agents/public/") or  # PUBLIC agent endpoints only
-            path == "/api/gemini-key"
+            path == "/api/gemini-key" or
+            path == "/api/sarvam-key" or
+            path == "/api/deepgram-key"
         )
 
         if is_widget_public and request.method == "OPTIONS":
@@ -319,6 +321,26 @@ async def health_check():
 async def get_gemini_key():
     """Expose Gemini API key to frontend for Live API WebSocket."""
     return {"key": os.getenv("GEMINI_API_KEY", "")}
+
+
+@app.get("/api/sarvam-key")
+async def get_sarvam_key():
+    """Expose Sarvam API key to frontend for STT WebSocket."""
+    key = os.getenv("SARVAM_API_KEY", "")
+    if not key:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Sarvam API key not configured")
+    return {"key": key}
+
+
+@app.get("/api/deepgram-key")
+async def get_deepgram_key():
+    """Expose Deepgram API key to frontend for STT WebSocket."""
+    key = os.getenv("DEEPGRAM_API_KEY", "")
+    if not key:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Deepgram API key not configured")
+    return {"key": key}
 
 
 if __name__ == "__main__":

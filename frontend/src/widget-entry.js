@@ -1,485 +1,504 @@
 /**
- * AI Voice Agent Widget — Embeddable SDK (Live API Version)
- * Uses LiveAudioService with @google/genai SDK.
+ * AI Voice Agent Widget — Embeddable SDK
+ * Premium redesign matching the VoiceForge AI design system.
  */
 
 import { LiveAudioService } from './services/liveAudioService';
 
-// Ensure LiveAudioService is bundled correctly
-console.log('[AgentWidget] Loading widget with Live API support...');
-
 (function () {
     'use strict';
 
-    const config = window.AgentWidgetConfig || {};
-    const AGENT_ID = config.agentId || '';
-    // Server URL isn't strictly needed for Live API main flow, but kept for fallback/config fetching if needed
-    const SERVER_URL = (config.serverUrl || 'http://localhost:8000').replace(/\/$/, '');
-    const THEME = config.theme || 'dark';
-    const POSITION = config.position || 'bottom-right';
-    const TITLE = config.title || 'AI Assistant';
-    const SUBTITLE = config.subtitle || 'Click to start a voice call';
-    const PRIMARY_COLOR = config.primaryColor || '#6C63FF';
+    const config       = window.AgentWidgetConfig || {};
+    const AGENT_ID     = config.agentId || '';
+    const SERVER_URL   = (config.serverUrl || 'http://localhost:8000').replace(/\/$/, '');
+    const THEME        = config.theme || 'dark';
+    const POSITION     = config.position || 'bottom-right';
+    const TITLE        = config.title || 'AI Assistant';
+    const SUBTITLE     = config.subtitle || 'Live voice call with AI';
+    const PRIMARY      = config.primaryColor || '#7c6dfa';
 
-    console.log('[AgentWidget] Config:', { AGENT_ID, SERVER_URL, THEME, POSITION, TITLE });
+    if (!AGENT_ID) return;
 
-    if (!AGENT_ID) {
-        console.error('[AgentWidget] No agentId provided in AgentWidgetConfig');
-        return;
-    }
-
-    // ─── Styles ─────────────────────────────────────────
     const isDark = THEME === 'dark';
-    const colors = {
-        bg: isDark ? '#1A1A3E' : '#FFFFFF',
-        bgSecondary: isDark ? '#12122A' : '#F5F5F5',
-        text: isDark ? '#F0F0FF' : '#1A1A2E',
-        textMuted: isDark ? '#9090B0' : '#666666',
-        border: isDark ? 'rgba(108, 99, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)',
-        primary: PRIMARY_COLOR,
-        danger: '#EF4444',
-        userMsg: isDark ? '#4F46E5' : '#E8E5FF',
-        agentMsg: isDark ? '#242450' : '#F0F0F0',
+
+    // ─── Color tokens ────────────────────────────────────────────────────────
+    const C = {
+        bg:          isDark ? '#0d0e1a' : '#ffffff',
+        bgCard:      isDark ? '#12141f' : '#f9fafb',
+        bgElevated:  isDark ? '#181a2a' : '#f1f5f9',
+        bgInput:     isDark ? '#1e2035' : '#f0f0f6',
+        border:      isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)',
+        borderAccent:isDark ? `${PRIMARY}40` : `${PRIMARY}33`,
+        text:        isDark ? '#e8eaf6' : '#1a1b2e',
+        textSub:     isDark ? '#9ea3c0' : '#6b7280',
+        textMuted:   isDark ? '#5a6080' : '#9ca3af',
+        primary:     PRIMARY,
+        danger:      '#f43f5e',
+        success:     '#22d3a0',
+        userBubble:  isDark ? `${PRIMARY}22` : `${PRIMARY}15`,
+        agentBubble: isDark ? '#181a2a' : '#f3f4f6',
     };
 
-    const posStyles = {
-        'bottom-right': 'right: 24px; bottom: 24px;',
-        'bottom-left': 'left: 24px; bottom: 24px;',
-    };
+    const isRight = POSITION !== 'bottom-left';
+    const posPanel = isRight ? 'right: 24px;' : 'left: 24px;';
+    const posFab   = isRight ? 'right: 24px; bottom: 24px;' : 'left: 24px; bottom: 24px;';
 
+    // ─── Inject CSS ──────────────────────────────────────────────────────────
     const css = `
-    #agent-widget-fab {
-      position: fixed;
-      ${posStyles[POSITION] || posStyles['bottom-right']}
-      z-index: 99999;
-      width: 64px;
-      height: 64px;
-      border-radius: 50%;
-      background: linear-gradient(135deg, ${colors.primary}, #00D9FF);
-      border: none;
-      cursor: pointer;
-      box-shadow: 0 4px 20px rgba(108, 99, 255, 0.4);
-      font-size: 28px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.3s ease;
-    }
-    #agent-widget-fab:hover {
-      transform: scale(1.1);
-      box-shadow: 0 8px 30px rgba(108, 99, 255, 0.5);
-    }
-    #agent-widget-panel {
-      position: fixed;
-      ${POSITION === 'bottom-left' ? 'left: 24px;' : 'right: 24px;'}
-      bottom: 100px;
-      z-index: 99999;
-      width: 380px;
-      max-height: 520px;
-      background: ${colors.bg};
-      border: 1px solid ${colors.border};
-      border-radius: 20px;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
-      display: none;
-      flex-direction: column;
-      overflow: hidden;
-      font-family: 'Inter', -apple-system, sans-serif;
-      color: ${colors.text};
-    }
-    #agent-widget-panel.open { display: flex; animation: awSlideUp 0.3s ease; }
-    @keyframes awSlideUp {
-      from { opacity: 0; transform: translateY(20px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    .aw-header {
-      padding: 16px 20px;
-      background: ${isDark ? 'rgba(108, 99, 255, 0.05)' : '#FAFAFA'};
-      border-bottom: 1px solid ${colors.border};
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .aw-header-title {
-      font-size: 16px;
-      font-weight: 700;
-      margin: 0;
-    }
-    .aw-header-sub {
-      font-size: 11px;
-      color: ${colors.textMuted};
-      margin: 2px 0 0;
-    }
-    .aw-close {
-      background: none;
-      border: none;
-      color: ${colors.textMuted};
-      font-size: 20px;
-      cursor: pointer;
-      padding: 4px;
-    }
-    .aw-messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      min-height: 200px;
-      max-height: 300px;
-    }
-    .aw-msg {
-      padding: 10px 14px;
-      border-radius: 14px;
-      font-size: 13px;
-      line-height: 1.5;
-      max-width: 85%;
-      word-break: break-word;
-    }
-    .aw-msg-user {
-      align-self: flex-end;
-      background: ${colors.userMsg};
-      color: ${isDark ? 'white' : '#333'};
-      border-bottom-right-radius: 4px;
-    }
-    .aw-msg-agent {
-      align-self: flex-start;
-      background: ${colors.agentMsg};
-      border: 1px solid ${colors.border};
-      border-bottom-left-radius: 4px;
-    }
-    .aw-msg-system {
-      align-self: center;
-      background: transparent;
-      color: ${colors.textMuted};
-      font-size: 11px;
-      text-align: center;
-    }
-    .aw-status {
-      text-align: center;
-      font-size: 12px;
-      color: ${colors.textMuted};
-      padding: 4px;
-    }
-    .aw-controls {
-      padding: 16px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 16px;
-      border-top: 1px solid ${colors.border};
-    }
-    .aw-mic {
-      width: 56px;
-      height: 56px;
-      border-radius: 50%;
-      border: none;
-      background: linear-gradient(135deg, ${colors.primary}, #00D9FF);
-      color: white;
-      font-size: 24px;
-      cursor: pointer;
-      transition: all 0.3s ease;
-      box-shadow: 0 4px 15px rgba(108, 99, 255, 0.3);
-    }
-    .aw-mic:hover { transform: scale(1.05); }
-    .aw-mic.recording {
-      background: ${colors.danger};
-      box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
-      animation: awPulse 1.2s ease infinite;
-    }
-    @keyframes awPulse {
-      0%, 100% { transform: scale(1); }
-      50% { transform: scale(1.05); }
-    }
-    .aw-input-row {
-      display: flex;
-      gap: 8px;
-      padding: 0 16px 12px;
-    }
-    .aw-input-row input {
-      flex: 1;
-      padding: 8px 12px;
-      background: ${colors.bgSecondary};
-      border: 1px solid ${colors.border};
-      border-radius: 10px;
-      color: ${colors.text};
-      font-size: 13px;
-      outline: none;
-      font-family: inherit;
-    }
-    .aw-input-row button {
-      padding: 8px 14px;
-      background: ${colors.primary};
-      border: none;
-      border-radius: 10px;
-      color: white;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-  `;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-    // ─── Inject Styles ──────────────────────────────────
+    #aw-fab {
+      position: fixed; ${posFab} z-index: 99999;
+      width: 60px; height: 60px; border-radius: 50%;
+      background: linear-gradient(135deg, ${C.primary}, #a78bfa);
+      border: none; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 24px ${C.primary}55;
+      transition: transform .25s ease, box-shadow .25s ease;
+    }
+    #aw-fab:hover { transform: scale(1.08); box-shadow: 0 6px 32px ${C.primary}77; }
+    #aw-fab svg { transition: transform .3s ease; }
+
+    #aw-panel {
+      position: fixed; ${posPanel} bottom: 96px;
+      z-index: 99999; width: 380px;
+      background: ${C.bg};
+      border: 1px solid ${C.border};
+      border-radius: 20px;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.45), 0 0 0 1px ${C.border};
+      display: none; flex-direction: column;
+      font-family: 'Inter', -apple-system, sans-serif;
+      color: ${C.text}; overflow: hidden;
+      max-height: 580px;
+    }
+    #aw-panel.open { display: flex; animation: awUp .25s cubic-bezier(.34,1.56,.64,1); }
+    @keyframes awUp {
+      from { opacity: 0; transform: translateY(16px) scale(.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* Header */
+    .aw-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 16px;
+      background: ${C.bgCard};
+      border-bottom: 1px solid ${C.border};
+    }
+    .aw-header-left { display: flex; align-items: center; gap: 10px; }
+    .aw-avatar {
+      width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+      background: linear-gradient(135deg, ${C.primary}33, #a78bfa33);
+      border: 1px solid ${C.primary}33;
+      display: grid; place-items: center;
+      font-size: 16px; font-weight: 800; color: ${C.primary};
+    }
+    .aw-title { font-size: 14px; font-weight: 700; line-height: 1; }
+    .aw-subtitle { font-size: 11px; color: ${C.textSub}; margin-top: 2px; }
+    .aw-header-right { display: flex; align-items: center; gap: 6px; }
+
+    /* Mode pills */
+    .aw-mode-group { display: flex; gap: 2px; background: ${C.bgInput}; border-radius: 8px; padding: 2px; }
+    .aw-mode-btn {
+      padding: 4px 10px; border: none; border-radius: 6px; cursor: pointer;
+      font-size: 11px; font-weight: 600; font-family: inherit;
+      transition: all .18s ease; color: ${C.textMuted}; background: transparent;
+    }
+    .aw-mode-btn.active { background: ${C.primary}; color: white; }
+    .aw-close-btn {
+      width: 28px; height: 28px; border-radius: 8px; border: none; cursor: pointer;
+      background: ${C.bgInput}; color: ${C.textMuted}; display: grid; place-items: center;
+      transition: all .18s ease;
+    }
+    .aw-close-btn:hover { background: ${C.danger}22; color: ${C.danger}; }
+
+    /* Status bar */
+    .aw-statusbar {
+      display: flex; align-items: center; gap: 7px;
+      padding: 6px 16px; font-size: 11px; font-weight: 500;
+      color: ${C.textSub}; border-bottom: 1px solid ${C.border};
+      background: ${C.bgCard};
+    }
+    .aw-live-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: ${C.textMuted}; flex-shrink: 0; transition: background .3s;
+    }
+    .aw-live-dot.live { background: ${C.success}; box-shadow: 0 0 8px ${C.success}88; }
+    .aw-live-dot.connecting { background: #fbbf24; }
+
+    /* Wave bars */
+    .aw-wave { display: flex; align-items: center; gap: 2px; height: 16px; margin-left: 4px; }
+    .aw-wave span {
+      width: 2px; border-radius: 99px;
+      background: ${C.primary}; opacity: 0.7;
+      animation: awBar .6s ease-in-out infinite alternate;
+    }
+    .aw-wave span:nth-child(1) { animation-delay: 0s; }
+    .aw-wave span:nth-child(2) { animation-delay: .1s; }
+    .aw-wave span:nth-child(3) { animation-delay: .2s; }
+    .aw-wave span:nth-child(4) { animation-delay: .15s; }
+    .aw-wave span:nth-child(5) { animation-delay: .05s; }
+    @keyframes awBar {
+      from { height: 3px; } to { height: 14px; }
+    }
+
+    /* Messages */
+    .aw-msgs {
+      flex: 1; overflow-y: auto; padding: 14px 12px;
+      display: flex; flex-direction: column; gap: 8px;
+      min-height: 220px; max-height: 320px;
+      scrollbar-width: thin; scrollbar-color: ${C.border} transparent;
+    }
+
+    /* Empty state */
+    .aw-empty {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 10px; padding: 24px 16px; text-align: center;
+    }
+    .aw-empty-btn {
+      width: 64px; height: 64px; border-radius: 50%; border: none; cursor: pointer;
+      background: linear-gradient(135deg, ${C.primary}, #a78bfa);
+      display: grid; place-items: center;
+      box-shadow: 0 4px 20px ${C.primary}55;
+      position: relative; transition: transform .2s ease;
+    }
+    .aw-empty-btn:disabled { opacity: .6; cursor: not-allowed; }
+    .aw-empty-btn:not(:disabled):hover { transform: scale(1.06); }
+    .aw-empty-btn::before, .aw-empty-btn::after {
+      content: ''; position: absolute; inset: -10px;
+      border-radius: 50%; border: 1px solid ${C.primary};
+      opacity: .2; animation: awRipple 2s ease-out infinite;
+    }
+    .aw-empty-btn::after { inset: -20px; animation-delay: .5s; }
+    @keyframes awRipple {
+      from { opacity: .25; transform: scale(.9); }
+      to   { opacity: 0;   transform: scale(1.15); }
+    }
+    .aw-empty-title { font-size: 13px; font-weight: 600; color: ${C.text}; }
+    .aw-empty-hint { font-size: 11px; color: ${C.textMuted}; line-height: 1.5; max-width: 220px; }
+
+    /* Bubbles */
+    .aw-bubble-wrap { display: flex; flex-direction: column; }
+    .aw-bubble-wrap.user { align-items: flex-end; }
+    .aw-bubble-wrap.agent { align-items: flex-start; }
+    .aw-bubble-wrap.system { align-items: center; }
+    .aw-bubble-label {
+      font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .06em; color: ${C.textMuted}; margin-bottom: 3px; padding: 0 4px;
+    }
+    .aw-bubble {
+      max-width: 82%; padding: 9px 13px;
+      font-size: 13px; line-height: 1.5; word-break: break-word;
+      animation: awBub .18s ease-out;
+    }
+    @keyframes awBub { from { opacity:0; transform:scale(.95); } to { opacity:1; transform:scale(1); } }
+    .aw-bubble.user {
+      background: ${C.userBubble}; color: ${C.text};
+      border: 1px solid ${C.borderAccent};
+      border-radius: 14px 14px 4px 14px;
+    }
+    .aw-bubble.agent {
+      background: ${C.agentBubble}; color: ${C.text};
+      border: 1px solid ${C.border};
+      border-radius: 14px 14px 14px 4px;
+    }
+    .aw-bubble.system {
+      background: ${C.bgInput}; color: ${C.textMuted};
+      border-radius: 8px; font-size: 11px;
+      border: 1px solid ${C.border}; max-width: 100%; text-align: center;
+    }
+
+    /* Footer */
+    .aw-footer {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 12px;
+      border-top: 1px solid ${C.border};
+      background: ${C.bgCard};
+    }
+    .aw-call-btn {
+      width: 38px; height: 38px; border-radius: 50%; border: none; cursor: pointer; flex-shrink: 0;
+      display: grid; place-items: center;
+      background: linear-gradient(135deg, ${C.primary}, #a78bfa);
+      box-shadow: 0 2px 12px ${C.primary}44;
+      transition: all .2s ease;
+    }
+    .aw-call-btn.active {
+      background: linear-gradient(135deg, ${C.danger}, #c0392b);
+      box-shadow: 0 2px 12px ${C.danger}44;
+    }
+    .aw-call-btn:disabled { opacity: .55; cursor: not-allowed; }
+    .aw-call-btn:not(:disabled):hover { transform: scale(1.08); }
+    .aw-input {
+      flex: 1; padding: 9px 14px; font-size: 13px; font-family: inherit;
+      background: ${C.bgInput}; border: 1px solid ${C.border}; border-radius: 20px;
+      color: ${C.text}; outline: none; transition: border-color .18s;
+    }
+    .aw-input:focus { border-color: ${C.primary}88; }
+    .aw-send-btn {
+      padding: 8px 14px; border: none; border-radius: 20px; cursor: pointer;
+      background: ${C.primary}; color: white; font-size: 12px; font-weight: 600;
+      font-family: inherit; transition: opacity .18s;
+      display: flex; align-items: center; gap: 4px;
+    }
+    .aw-send-btn:hover { opacity: .88; }
+    .aw-send-btn:disabled { opacity: .45; cursor: not-allowed; }
+    `;
+
     const styleEl = document.createElement('style');
     styleEl.textContent = css;
     document.head.appendChild(styleEl);
 
-    // ─── Build DOM ──────────────────────────────────────
+    // ─── FAB button ─────────────────────────────────────────────────────────
     const fab = document.createElement('button');
-    fab.id = 'agent-widget-fab';
-    fab.innerHTML = '🎤';
+    fab.id = 'aw-fab';
     fab.setAttribute('aria-label', 'Open AI Voice Agent');
+    fab.innerHTML = phoneSVG();
     document.body.appendChild(fab);
 
+    // ─── Panel ──────────────────────────────────────────────────────────────
     const panel = document.createElement('div');
-    panel.id = 'agent-widget-panel';
+    panel.id = 'aw-panel';
     panel.innerHTML = `
-    <div class="aw-header">
-      <div>
-        <div class="aw-header-title">${TITLE}</div>
-        <div class="aw-header-sub">${SUBTITLE}</div>
+      <div class="aw-header">
+        <div class="aw-header-left">
+          <div class="aw-avatar">${TITLE[0].toUpperCase()}</div>
+          <div>
+            <div class="aw-title">${TITLE}</div>
+            <div class="aw-subtitle">${SUBTITLE}</div>
+          </div>
+        </div>
+        <div class="aw-header-right">
+          <div class="aw-mode-group">
+            <button class="aw-mode-btn active" id="aw-btn-voice">Voice</button>
+            <button class="aw-mode-btn" id="aw-btn-chat">Chat</button>
+          </div>
+          <button class="aw-close-btn" id="aw-close" aria-label="Close">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <path d="M1 1l10 10M11 1L1 11"/>
+            </svg>
+          </button>
+        </div>
       </div>
-      <div style="display: flex; gap: 8px;">
-        <button id="aw-mode-voice" class="aw-mode-btn active" style="font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(108,99,255,0.3); background: rgba(108,99,255,0.1); color: inherit; cursor: pointer;">🎤 Voice</button>
-        <button id="aw-mode-chat" class="aw-mode-btn" style="font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(108,99,255,0.2); background: transparent; color: inherit; cursor: pointer;">💬 Chat</button>
+
+      <div class="aw-statusbar">
+        <div class="aw-live-dot" id="aw-dot"></div>
+        <span id="aw-status-text">Ready to connect</span>
+        <div class="aw-wave" id="aw-wave" style="display:none">
+          <span></span><span></span><span></span><span></span><span></span>
+        </div>
       </div>
-      <button class="aw-close" id="aw-close">✕</button>
-    </div>
-    <div class="aw-messages" id="aw-messages"></div>
-    <div class="aw-status" id="aw-status">Click the mic to start speaking</div>
-    <div class="aw-controls">
-      <button class="aw-mic" id="aw-mic">🎤</button>
-    </div>
-    <div class="aw-input-row" id="aw-input-row" style="display: none;">
-      <input type="text" id="aw-text-input" placeholder="Or type a message..." />
-      <button id="aw-text-send">Send</button>
-    </div>
-  `;
+
+      <div class="aw-msgs" id="aw-msgs">
+        <div class="aw-empty" id="aw-empty">
+          <button class="aw-empty-btn" id="aw-start-btn" title="Start call">
+            ${phoneSVG('white', 22)}
+          </button>
+          <div class="aw-empty-title">Tap to start</div>
+          <div class="aw-empty-hint">Click the button above to begin a voice call, or switch to Chat mode to type.</div>
+        </div>
+      </div>
+
+      <div class="aw-footer" id="aw-footer" style="display:none">
+        <button class="aw-call-btn" id="aw-footer-call" title="Start / End call">
+          ${phoneSVG('white', 16)}
+        </button>
+        <input class="aw-input" id="aw-text-input" placeholder="Type a message…" />
+        <button class="aw-send-btn" id="aw-send-btn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z"/></svg>
+          Send
+        </button>
+      </div>
+    `;
     document.body.appendChild(panel);
 
-    const messagesEl = document.getElementById('aw-messages');
-    const statusEl = document.getElementById('aw-status');
-    const micBtn = document.getElementById('aw-mic');
-    const closeBtn = document.getElementById('aw-close');
-    const textInput = document.getElementById('aw-text-input');
-    const textSend = document.getElementById('aw-text-send');
-    const inputRow = document.getElementById('aw-input-row');
-    const modeVoiceBtn = document.getElementById('aw-mode-voice');
-    const modeChatBtn = document.getElementById('aw-mode-chat');
+    // ─── Element refs ────────────────────────────────────────────────────────
+    const $ = (id) => document.getElementById(id);
+    const msgsEl      = $('aw-msgs');
+    const emptyEl     = $('aw-empty');
+    const footerEl    = $('aw-footer');
+    const statusText  = $('aw-status-text');
+    const dot         = $('aw-dot');
+    const waveEl      = $('aw-wave');
+    const textInput   = $('aw-text-input');
+    const sendBtn     = $('aw-send-btn');
+    const modeBtns    = { voice: $('aw-btn-voice'), chat: $('aw-btn-chat') };
+    const startBtn    = $('aw-start-btn');
+    const footerCall  = $('aw-footer-call');
 
-    // ─── State ──────────────────────────────────────────
-    let liveService = null;
-    let isConnected = false;
-    let isConnecting = false;
-    let agentConfig = null;
-    let widgetMode = 'voice';  // 'voice' or 'chat'
+    // ─── State ───────────────────────────────────────────────────────────────
+    let svc          = null;
+    let connected    = false;
+    let connecting   = false;
+    let agentCfg     = null;
+    let mode         = 'voice';
+    let userTx       = '';
+    let agentTx      = '';
 
-    // Transcript accumulators
-    let userTranscript = '';
-    let agentTranscript = '';
-
-    // ─── Events ─────────────────────────────────────────
-    fab.addEventListener('click', () => {
-        panel.classList.toggle('open');
-        fab.innerHTML = panel.classList.contains('open') ? '✕' : '🎤';
-    });
-
-    closeBtn.addEventListener('click', () => {
-        panel.classList.remove('open');
-        fab.innerHTML = '🎤';
-    });
-
-    micBtn.addEventListener('click', toggleCall);
-
-    textSend.addEventListener('click', sendTextMessage);
-    textInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') sendTextMessage();
-    });
-
-    // Mode toggle listeners
-    modeVoiceBtn.addEventListener('click', () => {
-        if (isConnected) return;  // Can't change mode while connected
-        widgetMode = 'voice';
-        modeVoiceBtn.classList.add('active');
-        modeVoiceBtn.style.background = 'rgba(108,99,255,0.1)';
-        modeVoiceBtn.style.border = '1px solid rgba(108,99,255,0.3)';
-        modeChatBtn.classList.remove('active');
-        modeChatBtn.style.background = 'transparent';
-        modeChatBtn.style.border = '1px solid rgba(108,99,255,0.2)';
-        messagesEl.innerHTML = '';
-        inputRow.style.display = 'none';
-        statusEl.textContent = 'Click the mic to talk (voice mode)';
-    });
-
-    modeChatBtn.addEventListener('click', () => {
-        if (isConnected) return;  // Can't change mode while connected
-        widgetMode = 'chat';
-        modeChatBtn.classList.add('active');
-        modeChatBtn.style.background = 'rgba(108,99,255,0.1)';
-        modeChatBtn.style.border = '1px solid rgba(108,99,255,0.3)';
-        modeVoiceBtn.classList.remove('active');
-        modeVoiceBtn.style.background = 'transparent';
-        modeVoiceBtn.style.border = '1px solid rgba(108,99,255,0.2)';
-        messagesEl.innerHTML = '';
-        statusEl.textContent = 'Chat mode - type or use mic';
-    });
-
-    // ─── Helper Functions ───────────────────────────────
-    function addMsg(role, text) {
-        const div = document.createElement('div');
-        div.className = `aw-msg aw-msg-${role}`;
-        div.textContent = text;
-        messagesEl.appendChild(div);
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+    // ─── UI helpers ──────────────────────────────────────────────────────────
+    function setStatus(text, state = 'idle') {
+        statusText.textContent = text;
+        dot.className = 'aw-live-dot' + (state === 'live' ? ' live' : state === 'connecting' ? ' connecting' : '');
+        waveEl.style.display = (state === 'live') ? 'flex' : 'none';
     }
 
-    // Update last message of a specific role
-    function updateLastMsg(role, text) {
-        const msgs = messagesEl.getElementsByClassName(`aw-msg-${role}`);
-        if (msgs.length > 0) {
-            msgs[msgs.length - 1].textContent = text;
-            messagesEl.scrollTop = messagesEl.scrollHeight;
+    function addBubble(role, text) {
+        // Remove empty state and show footer
+        if (emptyEl.parentNode) { emptyEl.remove(); footerEl.style.display = 'flex'; }
+
+        const wrap = document.createElement('div');
+        wrap.className = `aw-bubble-wrap ${role}`;
+
+        if (role !== 'system') {
+            const label = document.createElement('div');
+            label.className = 'aw-bubble-label';
+            label.textContent = role === 'user' ? 'You' : 'Agent';
+            wrap.appendChild(label);
+        }
+
+        const bub = document.createElement('div');
+        bub.className = `aw-bubble ${role}`;
+        bub.textContent = text;
+        wrap.appendChild(bub);
+        msgsEl.appendChild(wrap);
+        msgsEl.scrollTop = msgsEl.scrollHeight;
+        return bub; // return element for streaming updates
+    }
+
+    function updateLastBubble(role, text) {
+        const bubbles = msgsEl.querySelectorAll(`.aw-bubble.${role}`);
+        if (bubbles.length > 0) {
+            bubbles[bubbles.length - 1].textContent = text;
+            msgsEl.scrollTop = msgsEl.scrollHeight;
         } else {
-            addMsg(role, text);
+            addBubble(role, text);
         }
     }
 
-    async function fetchAgentConfig() {
-        try {
-            const res = await fetch(`${SERVER_URL}/api/agents/public/${AGENT_ID}`);
-            if (!res.ok) throw new Error('Failed to fetch agent config');
-            return await res.json();
-        } catch (err) {
-            console.error('[AgentWidget] Error fetching agent config:', err);
-            return {
-                id: AGENT_ID,
-                name: TITLE,
-                role: 'Assistant',
-                system_prompt: '',
-                voice_id: 'Puck'
-            };
+    function setCallActive(active) {
+        connected = active;
+        if (active) {
+            footerCall.className = 'aw-call-btn active';
+            footerCall.innerHTML = hangupSVG('white', 16);
+            footerCall.title = 'End call';
+        } else {
+            footerCall.className = 'aw-call-btn';
+            footerCall.innerHTML = phoneSVG('white', 16);
+            footerCall.title = 'Start call';
         }
+        startBtn.disabled = active || connecting;
     }
 
-    // ─── Core Logic (Live API) ──────────────────────────
-    async function toggleCall() {
-        if (isConnected) {
-            endCall();
-            return;
-        }
-
-        if (isConnecting) return;
-
-        startCall();
+    // ─── Mode toggle ─────────────────────────────────────────────────────────
+    function setMode(m) {
+        if (connected) return;
+        mode = m;
+        modeBtns.voice.className = 'aw-mode-btn' + (m === 'voice' ? ' active' : '');
+        modeBtns.chat.className  = 'aw-mode-btn' + (m === 'chat'  ? ' active' : '');
+        // Show/hide text input
+        textInput.style.display = sendBtn.style.display = (m === 'chat') ? '' : 'none';
+        setStatus('Ready to connect', 'idle');
     }
 
+    modeBtns.voice.addEventListener('click', () => setMode('voice'));
+    modeBtns.chat.addEventListener('click',  () => setMode('chat'));
+
+    // Init — voice mode, hide text input
+    textInput.style.display = sendBtn.style.display = 'none';
+
+    // ─── FAB / panel toggle ───────────────────────────────────────────────────
+    fab.addEventListener('click', () => {
+        const isOpen = panel.classList.toggle('open');
+        fab.innerHTML = isOpen ? closeSVG() : phoneSVG();
+    });
+    $('aw-close').addEventListener('click', () => {
+        panel.classList.remove('open');
+        fab.innerHTML = phoneSVG();
+    });
+
+    // ─── Start / end call ────────────────────────────────────────────────────
     async function startCall() {
-        isConnecting = true;
-        micBtn.innerHTML = '⏳';
-        statusEl.textContent = 'Connecting...';
+        if (connected || connecting) return;
+        connecting = true;
+        setStatus('Connecting…', 'connecting');
+        startBtn.disabled = true;
+        if (footerEl.style.display !== 'flex') { emptyEl.remove(); footerEl.style.display = 'flex'; }
 
-        if (!agentConfig) {
-            agentConfig = await fetchAgentConfig();
+        if (!agentCfg) {
+            try {
+                const res = await fetch(`${SERVER_URL}/api/agents/public/${AGENT_ID}`);
+                agentCfg = res.ok ? await res.json() : { id: AGENT_ID, name: TITLE, role: 'Assistant', system_prompt: '', voice_id: 'Puck' };
+            } catch { agentCfg = { id: AGENT_ID, name: TITLE, role: 'Assistant', system_prompt: '', voice_id: 'Puck' }; }
         }
 
-        liveService = new LiveAudioService();
+        svc = new LiveAudioService();
 
-        const success = await liveService.connect(agentConfig, {
+        const ok = await svc.connect(agentCfg, {
             onOpen: () => {
-                isConnected = true;
-                isConnecting = false;
-                micBtn.innerHTML = '⏹️';
-                micBtn.classList.add('recording');
-                statusEl.textContent = '🟢 Live — Listening...';
-                if (widgetMode === 'chat') {
-                    addMsg('system', `Connected to ${agentConfig.name}`);
-                    inputRow.style.display = 'flex';
-                } else {
-                    messagesEl.innerHTML = '';  // Clear messages in voice mode
-                    inputRow.style.display = 'none';
-                }
-                userTranscript = '';
-                agentTranscript = '';
+                connecting = false;
+                setStatus('Live — Listening', 'live');
+                setCallActive(true);
+                userTx = ''; agentTx = '';
+                if (mode === 'chat') addBubble('system', `Connected to ${agentCfg.name}`);
             },
             onClose: () => {
-                isConnected = false;
-                isConnecting = false;
-                micBtn.innerHTML = '🎤';
-                micBtn.classList.remove('recording');
-                statusEl.textContent = 'Call ended';
-                if (widgetMode === 'chat') {
-                    addMsg('system', 'Call disconnected');
-                }
-                liveService = null;
+                connecting = false;
+                setCallActive(false);
+                setStatus('Call ended', 'idle');
+                if (mode === 'chat') addBubble('system', 'Call disconnected');
+                svc = null;
             },
             onError: (e) => {
-                console.error('[AgentWidget] Error:', e);
-                isConnected = false;
-                isConnecting = false;
-                micBtn.innerHTML = '🎤';
-                micBtn.classList.remove('recording');
-                statusEl.textContent = 'Error';
-                if (widgetMode === 'chat') {
-                    addMsg('system', `⚠️ ${e?.message || 'Connection error'}`);
-                }
-                liveService = null;
+                connecting = false;
+                setCallActive(false);
+                setStatus('Connection error', 'idle');
+                if (mode === 'chat') addBubble('system', `⚠️ ${e?.message || 'Error'}`);
+                svc = null;
             },
-            onInterrupted: () => {
-                statusEl.textContent = '⚡ Interrupted — Listening...';
-            },
+            onInterrupted: () => { setStatus('Listening…', 'live'); },
+            onTurnComplete: () => { setStatus('Listening…', 'live'); },
             onTranscription: (text, isUser) => {
-                if (!text || !text.trim() || widgetMode !== 'chat') return;
-
+                if (!text?.trim() || mode !== 'chat') return;
                 if (isUser) {
-                    if (userTranscript === '') {
-                        userTranscript = text;
-                        addMsg('user', `🎤 ${text}`);
-                    } else {
-                        userTranscript += text;
-                        updateLastMsg('user', `🎤 ${userTranscript}`);
-                    }
-                    agentTranscript = '';
-                    statusEl.textContent = '🟢 Listening...';
+                    if (!userTx) { userTx = text; addBubble('user', text); }
+                    else { userTx += text; updateLastBubble('user', userTx); }
+                    agentTx = '';
+                    setStatus('Processing…', 'live');
                 } else {
-                    if (agentTranscript === '') {
-                        agentTranscript = text;
-                        addMsg('agent', text);
-                    } else {
-                        agentTranscript += text;
-                        updateLastMsg('agent', agentTranscript);
-                    }
-                    userTranscript = '';
-                    statusEl.textContent = '🗣️ Agent speaking...';
+                    if (!agentTx) { agentTx = text; addBubble('agent', text); }
+                    else { agentTx += text; updateLastBubble('agent', agentTx); }
+                    userTx = '';
+                    setStatus('Agent speaking…', 'live');
                 }
-            }
-        }, { mode: widgetMode });
+            },
+        }, { mode, recordingEnabled: true, callerId: null });
 
-        if (!success) {
-            isConnecting = false;
-            micBtn.innerHTML = '🎤';
-            statusEl.textContent = 'Connection failed';
+        if (!ok) {
+            connecting = false;
+            startBtn.disabled = false;
+            setStatus('Connection failed', 'idle');
         }
     }
 
     function endCall() {
-        if (liveService) {
-            liveService.disconnect();
-            liveService = null;
-        }
+        if (svc) { svc.disconnect(); svc = null; }
+        connecting = false;
+        setCallActive(false);
     }
 
-    async function sendTextMessage() {
+    startBtn.addEventListener('click', startCall);
+    footerCall.addEventListener('click', () => connected ? endCall() : startCall());
+
+    // ─── Text send ───────────────────────────────────────────────────────────
+    async function sendText() {
         const text = textInput.value.trim();
         if (!text) return;
         textInput.value = '';
+        addBubble('user', text);
+        setStatus('Thinking…', connected ? 'live' : 'idle');
 
-        if (isConnected && liveService) {
-            addMsg('user', text);
-            liveService.sendText(text);
-            statusEl.textContent = 'Thinking...';
+        if (connected && svc) {
+            svc.sendText(text);
         } else {
-            // REST Fallback setup
-            addMsg('user', text);
-            statusEl.textContent = 'Thinking...';
             try {
                 const res = await fetch(`${SERVER_URL}/api/agents/${AGENT_ID}/chat`, {
                     method: 'POST',
@@ -487,14 +506,33 @@ console.log('[AgentWidget] Loading widget with Live API support...');
                     body: JSON.stringify({ message: text }),
                 });
                 const data = await res.json();
-                addMsg('agent', data.response);
-                statusEl.textContent = 'Agent responded';
+                addBubble('agent', data.response);
+                setStatus('Ready', 'idle');
             } catch (err) {
-                addMsg('system', '⚠️ ' + err.message);
-                statusEl.textContent = 'Error';
+                addBubble('system', `⚠️ ${err.message}`);
+                setStatus('Error', 'idle');
             }
         }
     }
 
-    console.log('[AgentWidget] 🎉 Widget initialized (Live API mode)!');
+    sendBtn.addEventListener('click', sendText);
+    textInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendText(); });
+
+    // ─── SVG helpers ─────────────────────────────────────────────────────────
+    function phoneSVG(fill = 'white', size = 26) {
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${fill}">
+          <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/>
+        </svg>`;
+    }
+    function hangupSVG(fill = 'white', size = 16) {
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${fill}" style="transform:rotate(135deg)">
+          <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/>
+        </svg>`;
+    }
+    function closeSVG() {
+        return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round">
+          <path d="M18 6L6 18M6 6l12 12"/>
+        </svg>`;
+    }
+
 })();

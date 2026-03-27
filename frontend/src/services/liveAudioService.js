@@ -1,64 +1,74 @@
 /**
- * LiveAudioService — Gemini Live API real-time voice client
- * ══════════════════════════════════════════════════════════
+ * LiveAudioService — HYBRID v5 (Sarvam STT primary + Deepgram fallback → Gemini audio)
+ * ═══════════════════════════════════════════════════════════════════════════════════════
  *
- * Model: gemini-2.5-flash-native-audio-preview-12-2025
- * Protocol: Raw WebSocket to generativelanguage.googleapis.com
- * Endpoint: v1beta (camelCase JSON fields required)
+ * Architecture:
+ *   Mic (16kHz PCM) ──→ Sarvam/Deepgram STT WebSocket ──→ text
+ *                                                            ↓
+ *   Speaker ←── audio ←── Gemini Live API ←── text (clientContent)
  *
- * BUGS FIXED:
- *  1. "Request contains an invalid argument" crash
- *     - _sendSetup() was using snake_case "system_instruction" — must be camelCase "systemInstruction"
- *     - _greet() was sending bare { turnComplete: true } without turns array — Gemini rejects this
+ * WHY:
+ *   - Streaming raw audio to Gemini causes token accumulation → progressive latency
+ *   - Sending TEXT to Gemini keeps context tiny → constant fast latency every turn
+ *   - Sarvam AI Saaras v3 has best Tanglish/Tamil accuracy with codemix mode
+ *   - Deepgram Nova-3 multi-language is reliable fallback
  *
- *  2. Ghost responses after interrupt (race condition)
- *     - Added _discardUntilNewTurn flag that stays true from interrupt until turnComplete
- *     - Audio chunks arriving between interrupt and turnComplete are silently dropped
+ * STT PROVIDERS:
+ *   Primary:  Sarvam AI — wss://api.sarvam.ai/speech-to-text/streaming
+ *             Model: saaras:v3, mode: codemix, language: ta-IN
+ *             Supports: PCM 16kHz, VAD signals, code-mixed speech
  *
- *  3. Premature speech cutoff for Tamil
- *     - Silence threshold increased from 3 frames (300ms) to 12 frames (~1.2s)
- *     - Tamil speech has 400-800ms intra-sentence pauses; old threshold cut mid-sentence
- *     - Minimum 3 consecutive speech frames required (was 2)
+ *   Fallback: Deepgram — wss://api.deepgram.com/v1/listen
+ *             Model: nova-3, language: multi (code-switching)
+ *             Supports: PCM 16kHz, interim results, endpointing
  *
- *  4. Agent self-interruption (echo)
- *     - Echo gate: while agent plays audio and user hasn't started speaking, skip VAD
- *     - Audio still streams to Gemini for server-side interrupt detection
+ * SETUP REQUIRED:
+ *   Add to your .env file:
+ *     VITE_SARVAM_API_KEY=your-sarvam-key      (from dashboard.sarvam.ai)
+ *     VITE_DEEPGRAM_API_KEY=your-deepgram-key   (from console.deepgram.com)
  *
- *  5. Manual turnComplete removed
- *     - Gemini's server-side VAD handles end-of-speech detection from the audio stream
- *     - Client VAD only used for: stopping agent audio on interrupt + UI state feedback
+ *   For CRA use REACT_APP_SARVAM_API_KEY / REACT_APP_DEEPGRAM_API_KEY instead.
  *
- *  6. KB fetch with retry (3 attempts, 500ms backoff)
- *
- *  7. All commented-out legacy code removed (was 657 lines of dead code)
+ *   TODO (later): Switch to fetching keys from backend endpoints:
+ *     GET /sarvam-key  → { key: "..." }
+ *     GET /deepgram-key → { key: "..." }
  */
 
 import { SpeakerVoiceLock } from './speakerVoiceLock.js';
 import { getAPIBase } from '../api';
+import CallRecordingSDK from './callRecordingSDK.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const MODEL       = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
-const MIC_RATE    = 16000;
-const SPEAK_RATE  = 24000;
+const MODEL      = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
+const MIC_RATE   = 16000;
+const SPEAK_RATE = 24000;
+const WORKLET_CHUNK = 1024;  // 64ms frames
 
-// VAD tuning for Tamil/Tanglish
-const VAD_THRESHOLD         = 0.02;   // RMS energy floor
-const VAD_SILENCE_FRAMES    = 12;     // ~1.2s silence = end of speech
-const VAD_MIN_SPEECH_FRAMES = 3;      // consecutive frames to confirm real speech
-const VAD_MIN_SPEECH_MS     = 500;    // ignore speech shorter than this
+// Context compression (safety net — text tokens are small but still accumulate)
+const CTX_TRIGGER_TOKENS = 10000;
+const CTX_TARGET_TOKENS  = 5000;
+
+// STT debounce — wait after last transcript before sending to Gemini
+const SEND_DEBOUNCE_MS = 500;
+
+// ─── API Keys (from env — switch to endpoint fetch later) ────────────────────
+// Vite:    import.meta.env.VITE_SARVAM_API_KEY
+// CRA:     process.env.REACT_APP_SARVAM_API_KEY
+// Generic: process.env.SARVAM_API_KEY
+const ENV_SARVAM_KEY   = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SARVAM_API_KEY)
+                       || (typeof process !== 'undefined' && process.env?.REACT_APP_SARVAM_API_KEY)
+                       || null;
+
+const ENV_DEEPGRAM_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_DEEPGRAM_API_KEY)
+                       || (typeof process !== 'undefined' && process.env?.REACT_APP_DEEPGRAM_API_KEY)
+                       || null;
 
 // ─── PCM Helpers ─────────────────────────────────────────────────────────────
 
-function toB64(u8) {
-    let s = '';
-    for (let i = 0; i < u8.byteLength; i++) s += String.fromCharCode(u8[i]);
-    return btoa(s);
-}
-
 function fromB64(b64) {
     const bin = atob(b64);
-    const u8 = new Uint8Array(bin.length);
+    const u8  = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     return u8;
 }
@@ -79,30 +89,31 @@ function i16ToF32(bytes) {
     return f32;
 }
 
-// ─── AudioWorklet (inlined as blob URL) ──────────────────────────────────────
+// ─── AudioWorklet ────────────────────────────────────────────────────────────
 
 const WORKLET_SRC = `
 class CaptureProc extends AudioWorkletProcessor {
-    constructor() { super(); this._buf = []; }
+    constructor(options) {
+        super();
+        this._chunk = (options && options.processorOptions && options.processorOptions.chunk) || 1024;
+        this._buf = [];
+    }
     process(inputs) {
         const ch = inputs[0]?.[0];
         if (ch) { for (let i = 0; i < ch.length; i++) this._buf.push(ch[i]); }
-        while (this._buf.length >= 4096)
-            this.port.postMessage(new Float32Array(this._buf.splice(0, 4096)));
+        while (this._buf.length >= this._chunk)
+            this.port.postMessage(new Float32Array(this._buf.splice(0, this._chunk)));
         return true;
     }
 }
 registerProcessor('capture-proc', CaptureProc);
 `;
+const WORKLET_URL = 'data:application/javascript;base64,' + btoa(WORKLET_SRC);
 
-// ─── Gapless Audio Player (24kHz output context) ─────────────────────────────
+// ─── Gapless Audio Player ─────────────────────────────────────────────────────
 
 class Player {
-    constructor() {
-        this._ctx  = null;
-        this._t    = 0;
-        this._srcs = [];
-    }
+    constructor() { this._ctx = null; this._t = 0; this._srcs = []; }
 
     prime() {
         if (!this._ctx || this._ctx.state === 'closed') {
@@ -138,18 +149,215 @@ class Player {
         if (this._ctx && this._ctx.state !== 'closed') this._t = this._ctx.currentTime;
     }
 
-    close() {
-        this.stop();
-        if (this._ctx) { try { this._ctx.close(); } catch (_) {} this._ctx = null; }
+    close() { this.stop(); if (this._ctx) { try { this._ctx.close(); } catch (_) {} this._ctx = null; } }
+    get isPlaying() { return this._srcs.length > 0; }
+}
+
+// ─── STT Provider: Sarvam AI ─────────────────────────────────────────────────
+
+class SarvamSTT {
+    constructor(apiKey, onTranscript, onSpeechStart, onSpeechEnd, onError) {
+        this._key = apiKey;
+        this._ws = null;
+        this._onTranscript = onTranscript;
+        this._onSpeechStart = onSpeechStart;
+        this._onSpeechEnd = onSpeechEnd;
+        this._onError = onError;
+        this._alive = false;
     }
+
+    async connect() {
+        // Sarvam STT WebSocket endpoint: wss://api.sarvam.ai/speech-to-text/ws
+        // Auth: Api-Subscription-Key header — but browser WebSockets can't set
+        // custom headers, so we pass it as a query param.
+        // If this doesn't work, you'll need a backend proxy.
+        const params = new URLSearchParams({
+            'model': 'saaras:v3',
+            'mode': 'codemix',
+            'language-code': 'ta-IN',
+            'sample_rate': String(MIC_RATE),
+            'input_audio_codec': 'pcm_s16le',
+            'high_vad_sensitivity': 'true',
+            'vad_signals': 'true',
+            'Api-Subscription-Key': this._key,
+        });
+
+        const url = `wss://api.sarvam.ai/speech-to-text/ws?${params}`;
+
+        return new Promise((resolve, reject) => {
+            // Try connecting — if query-param auth fails, Sarvam needs a backend proxy
+            const ws = new WebSocket(url);
+            this._ws = ws;
+
+            const timeout = setTimeout(() => {
+                reject(new Error('Sarvam STT connection timeout'));
+                try { ws.close(); } catch (_) {}
+            }, 8000);
+
+            ws.onopen = () => {
+                clearTimeout(timeout);
+                this._alive = true;
+                console.log('[STT:Sarvam] ✅ Connected (codemix mode)');
+                resolve();
+            };
+
+            ws.onmessage = (evt) => {
+                try {
+                    const msg = JSON.parse(evt.data);
+
+                    if (msg.type === 'speech_start') {
+                        this._onSpeechStart?.();
+                    } else if (msg.type === 'speech_end') {
+                        this._onSpeechEnd?.();
+                    } else if (msg.type === 'transcript' || msg.transcript || msg.text) {
+                        const text = msg.text || msg.transcript || '';
+                        if (text.trim()) {
+                            this._onTranscript(text.trim(), true);
+                        }
+                    }
+                } catch (_) {}
+            };
+
+            ws.onerror = (e) => {
+                clearTimeout(timeout);
+                console.error('[STT:Sarvam] Error');
+                this._alive = false;
+                reject(new Error('Sarvam STT error'));
+                this._onError?.();
+            };
+
+            ws.onclose = () => {
+                clearTimeout(timeout);
+                this._alive = false;
+                console.log('[STT:Sarvam] Disconnected');
+            };
+        });
+    }
+
+    sendAudio(pcmI16Bytes) {
+        if (this._ws?.readyState === WebSocket.OPEN) {
+            this._ws.send(pcmI16Bytes);
+        }
+    }
+
+    close() {
+        this._alive = false;
+        if (this._ws) { try { this._ws.close(); } catch (_) {} this._ws = null; }
+    }
+
+    get isAlive() { return this._alive && this._ws?.readyState === WebSocket.OPEN; }
+}
+
+// ─── STT Provider: Deepgram (fallback) ───────────────────────────────────────
+
+class DeepgramSTT {
+    constructor(apiKey, onTranscript, onSpeechStart, onSpeechEnd, onError) {
+        this._key = apiKey;
+        this._ws = null;
+        this._onTranscript = onTranscript;
+        this._onSpeechStart = onSpeechStart;
+        this._onSpeechEnd = onSpeechEnd;
+        this._onError = onError;
+        this._alive = false;
+        this._speaking = false;
+    }
+
+    async connect() {
+        const params = new URLSearchParams({
+            model: 'nova-3',
+            // Tamil standalone mode — handles Tamil+English code-mixing
+            // better than 'multi' which doesn't include Tamil
+            language: 'ta',
+            encoding: 'linear16',
+            sample_rate: String(MIC_RATE),
+            channels: '1',
+            interim_results: 'true',
+            endpointing: '100',
+            smart_format: 'true',
+            punctuate: 'true',
+        });
+
+        const url = `wss://api.deepgram.com/v1/listen?${params}`;
+
+        return new Promise((resolve, reject) => {
+            const ws = new WebSocket(url, ['token', this._key]);
+            this._ws = ws;
+
+            const timeout = setTimeout(() => {
+                reject(new Error('Deepgram STT connection timeout'));
+                try { ws.close(); } catch (_) {}
+            }, 8000);
+
+            ws.onopen = () => {
+                clearTimeout(timeout);
+                this._alive = true;
+                console.log('[STT:Deepgram] ✅ Connected (nova-3 multi)');
+                resolve();
+            };
+
+            ws.onmessage = (evt) => {
+                try {
+                    const msg = JSON.parse(evt.data);
+
+                    if (msg.type === 'Results') {
+                        const alt = msg.channel?.alternatives?.[0];
+                        const text = alt?.transcript || '';
+                        const isFinal = msg.is_final;
+
+                        if (text.trim()) {
+                            if (!this._speaking) {
+                                this._speaking = true;
+                                this._onSpeechStart?.();
+                            }
+                            this._onTranscript(text.trim(), isFinal);
+                        }
+
+                        if (msg.speech_final) {
+                            this._speaking = false;
+                            this._onSpeechEnd?.();
+                        }
+                    }
+                } catch (_) {}
+            };
+
+            ws.onerror = () => {
+                clearTimeout(timeout);
+                this._alive = false;
+                reject(new Error('Deepgram STT error'));
+                this._onError?.();
+            };
+
+            ws.onclose = () => {
+                clearTimeout(timeout);
+                this._alive = false;
+                console.log('[STT:Deepgram] Disconnected');
+            };
+        });
+    }
+
+    sendAudio(pcmI16Bytes) {
+        if (this._ws?.readyState === WebSocket.OPEN) {
+            this._ws.send(pcmI16Bytes.buffer);
+        }
+    }
+
+    close() {
+        this._alive = false;
+        if (this._ws) {
+            try { this._ws.send(JSON.stringify({ type: 'CloseStream' })); } catch (_) {}
+            try { this._ws.close(); } catch (_) {}
+            this._ws = null;
+        }
+    }
+
+    get isAlive() { return this._alive && this._ws?.readyState === WebSocket.OPEN; }
 }
 
 // ─── LiveAudioService ────────────────────────────────────────────────────────
 
 export class LiveAudioService {
 
-    // Shared across instances to avoid recreation latency
-    static _sharedMicCtx      = null;
+    static _sharedMicCtx       = null;
     static _sharedWorkletReady = false;
     static _sharedWorkletNode  = null;
 
@@ -166,21 +374,39 @@ export class LiveAudioService {
         this._worklet = null;
         this._stream  = null;
         this._source  = null;
-        this._keepalive = null;
 
-        // Turn & interrupt state
-        this._playing              = false;
-        this._turnInterrupted      = false;
-        this._discardUntilNewTurn  = false;
-
-        // VAD state
-        this._lastWasSpeech        = false;
-        this._vadSilenceFrames     = 0;
-        this._vadConsecutiveSpeech = 0;
-        this._speechStartTime      = 0;
+        // Turn state
+        this._playing             = false;
+        this._turnInterrupted     = false;
+        this._discardUntilNewTurn = false;
 
         // KB
         this._kbContext = '';
+
+        // Session
+        this._resumptionToken = null;
+        this._geminiKey       = null;
+        this._isReconnecting  = false;
+        this._keepalive       = null;
+
+        // STT
+        this._stt             = null;   // active STT provider
+        this._sttProvider     = '';     // 'sarvam' or 'deepgram'
+        this._sarvamKey       = null;
+        this._deepgramKey     = null;
+        this._finalText       = '';
+        this._sendTimer       = null;
+        this._userSpeaking    = false;
+
+        // Diagnostics
+        this._turnCount        = 0;
+        this._sessionStartTime = 0;
+        this._lastSendTime     = 0;
+        this._lastAudioRcvTime = 0;
+
+        // Recording (via CallRecordingSDK)
+        this._recorder         = null;
+        this._recordingStartTime = 0;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -193,27 +419,47 @@ export class LiveAudioService {
         this._mode  = options.mode || 'chat';
         this._stop  = false;
         this._live  = false;
-        this._playing = false;
-        this._turnInterrupted = false;
+        this._playing             = false;
+        this._turnInterrupted     = false;
         this._discardUntilNewTurn = false;
-        this._kbContext = '';
+        this._kbContext           = '';
+        this._resumptionToken     = null;
+        this._turnCount           = 0;
+        this._sessionStartTime    = Date.now();
+        this._finalText           = '';
 
         try {
             this._player.prime();
             const API = getAPIBase();
 
-            // Load KB with retry
-            if (agentConfig.id) {
-                await this._loadKB(API, agentConfig.id);
+            // Fetch Gemini key from backend + KB in parallel
+            // STT keys come from env vars (switch to endpoint later)
+            const [geminiKey] = await Promise.all([
+                this._fetchKey(API, 'gemini-key'),
+                agentConfig.id ? this._loadKB(API, agentConfig.id) : Promise.resolve(),
+            ]);
+
+            this._geminiKey   = geminiKey;
+            this._sarvamKey   = ENV_SARVAM_KEY;
+            this._deepgramKey = ENV_DEEPGRAM_KEY;
+
+            // TODO: Later, switch to fetching from endpoints:
+            // this._sarvamKey   = await this._fetchKey(API, 'sarvam-key').catch(() => null);
+            // this._deepgramKey = await this._fetchKey(API, 'deepgram-key').catch(() => null);
+
+            if (!this._sarvamKey && !this._deepgramKey) {
+                throw new Error('No STT API key found. Set VITE_SARVAM_API_KEY or VITE_DEEPGRAM_API_KEY in .env');
             }
 
-            // Get Gemini key
-            const res = await fetch(`${API}/gemini-key`);
-            if (!res.ok) throw new Error('Cannot fetch Gemini key');
-            const { key } = await res.json();
+            console.log('[LA] STT keys:', this._sarvamKey ? '✅ Sarvam' : '❌ Sarvam', '|', this._deepgramKey ? '✅ Deepgram' : '❌ Deepgram');
 
-            // Connect WebSocket (blocks until setupComplete)
-            const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${key}`;
+            // Initialize recorder (if options.recordingEnabled)
+            if (options.recordingEnabled !== false && agentConfig?.id) {
+                this._initializeRecorder(agentConfig.id, options.callerId);
+            }
+
+            // Connect to Gemini
+            const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${geminiKey}`;
             await this._connectWS(url);
             return true;
         } catch (e) {
@@ -227,21 +473,27 @@ export class LiveAudioService {
         this._stop = true;
         this._live = false;
         this._stopMic();
+        this._stt?.close();
         this._player.close();
+        if (this._keepalive) { clearInterval(this._keepalive); this._keepalive = null; }
         if (this._ws) { try { this._ws.close(1000, 'bye'); } catch (_) {} this._ws = null; }
+        
+        // End recording (async, fire-and-forget)
+        if (this._recorder) {
+            this._recorder.endSession().catch(e => console.warn('[LA] Error ending recording:', e));
+        }
+        
         this._emit('onClose');
     }
 
-    toggleMute() { this._muted = !this._muted; return this._muted; }
+    toggleMute() {
+        this._muted = !this._muted;
+        return this._muted;
+    }
 
     sendText(text) {
         if (!text?.trim()) return;
-        this._wsSend({
-            clientContent: {
-                turns: [{ role: 'user', parts: [{ text }] }],
-                turnComplete: true,
-            }
-        });
+        this._sendToGemini(text.trim());
     }
 
     static resetSharedResources() {
@@ -250,34 +502,41 @@ export class LiveAudioService {
             LiveAudioService._sharedMicCtx = null;
         }
         LiveAudioService._sharedWorkletReady = false;
-        LiveAudioService._sharedWorkletNode = null;
+        LiveAudioService._sharedWorkletNode  = null;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // KB LOADING (retry with backoff)
+    // INIT HELPERS
     // ═══════════════════════════════════════════════════════════════════════════
+
+    async _fetchKey(apiBase, endpoint) {
+        const res = await fetch(`${apiBase}/${endpoint}`);
+        if (!res.ok) throw new Error(`Cannot fetch ${endpoint}`);
+        const { key } = await res.json();
+        return key;
+    }
 
     async _loadKB(apiBase, agentId) {
         for (let attempt = 0; attempt < 3; attempt++) {
             try {
-                const t0 = performance.now();
                 const res = await fetch(`${apiBase}/agents/public/${agentId}/kb-context`);
                 if (res.ok) {
                     const data = await res.json();
                     this._kbContext = data.context || '';
-                    console.log(`[LA] KB loaded (attempt ${attempt + 1}): ${this._kbContext.length} chars in ${(performance.now() - t0).toFixed(0)}ms`);
-                    if (this._kbContext.length > 0) return;
+                    if (this._kbContext.length > 0) {
+                        console.log(`[LA] KB loaded: ${this._kbContext.length} chars`);
+                        return;
+                    }
                 }
             } catch (e) {
                 console.warn(`[LA] KB attempt ${attempt + 1} failed:`, e.message);
             }
             if (attempt < 2) await new Promise(r => setTimeout(r, 500));
         }
-        if (!this._kbContext) console.warn('[LA] KB context empty after all retries');
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // WEBSOCKET CONNECTION
+    // GEMINI WEBSOCKET
     // ═══════════════════════════════════════════════════════════════════════════
 
     _connectWS(url) {
@@ -287,68 +546,110 @@ export class LiveAudioService {
             this._ws = ws;
 
             const timeout = setTimeout(() => {
-                reject(new Error('Timeout waiting for setupComplete'));
+                reject(new Error('Timeout'));
                 try { ws.close(); } catch (_) {}
             }, 15000);
 
             ws.onopen = () => {
-                console.log('[LA] WS open → sending setup');
+                console.log('[LA] Gemini WS open');
                 this._sendSetup();
             };
 
             ws.onmessage = async (evt) => {
-                const raw = typeof evt.data === 'string'
-                    ? evt.data
-                    : new TextDecoder().decode(new Uint8Array(evt.data));
+                const raw = typeof evt.data === 'string' ? evt.data : new TextDecoder().decode(new Uint8Array(evt.data));
                 let msg;
                 try { msg = JSON.parse(raw); } catch { return; }
 
-                // setupComplete
                 if (msg.setupComplete !== undefined) {
-                    console.log('[LA] setupComplete ✅');
                     clearTimeout(timeout);
                     try {
-                        await this._startMic();
+                        if (!this._isReconnecting) {
+                            await this._startMic();
+                            await this._connectSTT();
+                        }
                         this._live = true;
                         this._emit('onOpen');
-                        this._sendGreeting();
+                        if (!this._isReconnecting) this._sendGreeting();
+                        this._isReconnecting = false;
+
+                        if (!this._keepalive) {
+                            this._keepalive = setInterval(() => {
+                                if (this._ws?.readyState === WebSocket.OPEN) {
+                                    this._wsSend({ clientContent: { turns: [] } });
+                                }
+                            }, 15000);
+                        }
                         resolve();
-                    } catch (e) {
-                        reject(new Error('Mic: ' + e.message));
-                    }
+                    } catch (e) { reject(e); }
                     return;
                 }
 
                 if (msg.error) {
                     clearTimeout(timeout);
                     const e = new Error(msg.error.message || JSON.stringify(msg.error));
-                    console.error('[LA] Server error:', e.message);
-                    reject(e);
-                    this._emit('onError', e);
+                    reject(e); this._emit('onError', e);
                     return;
+                }
+
+                if (msg.goAway || msg.go_away) {
+                    this._scheduleReconnect();
+                    return;
+                }
+
+                if (msg.sessionResumptionUpdate || msg.session_resumption_update) {
+                    const sru = msg.sessionResumptionUpdate || msg.session_resumption_update;
+                    if (sru.newHandle || sru.new_handle) {
+                        this._resumptionToken = sru.newHandle || sru.new_handle;
+                    }
+                    return;
+                }
+
+                if (msg.usageMetadata || msg.usage_metadata) {
+                    const total = (msg.usageMetadata || msg.usage_metadata).totalTokenCount || 0;
+                    if (total > 0) console.log(`[LA] 📊 Context: ${total} tokens (turn #${this._turnCount})`);
                 }
 
                 this._handleServerContent(msg);
             };
 
             ws.onerror = () => { clearTimeout(timeout); reject(new Error('WS error')); };
-
             ws.onclose = (e) => {
                 clearTimeout(timeout);
                 this._live = false;
-                if (!this._stop) {
-                    const reason = e.reason || `code ${e.code}`;
-                    console.warn('[LA] WS closed:', reason);
-                    reject(new Error(reason));
-                    this._emit('onError', new Error(reason));
+                if (!this._stop && this._resumptionToken && !this._isReconnecting) {
+                    this._attemptResume();
+                } else if (!this._stop) {
+                    reject(new Error(e.reason || `code ${e.code}`));
+                    this._emit('onError', new Error(e.reason));
                     this._emit('onClose');
                 }
             };
         });
     }
 
+    async _attemptResume() {
+        if (!this._geminiKey || !this._resumptionToken) return;
+        this._isReconnecting = true;
+        try {
+            const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this._geminiKey}`;
+            await this._connectWS(url);
+        } catch (e) {
+            this._isReconnecting = false;
+            this._emit('onError', e);
+            this._emit('onClose');
+        }
+    }
+
+    _scheduleReconnect() {
+        setTimeout(() => {
+            if (this._stop) return;
+            if (this._ws) { try { this._ws.close(1000); } catch (_) {} }
+            this._attemptResume();
+        }, 500);
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
-    // SETUP (FIX #1: correct camelCase for v1beta WebSocket protocol)
+    // SETUP — text in, audio out
     // ═══════════════════════════════════════════════════════════════════════════
 
     _sendSetup() {
@@ -376,243 +677,301 @@ export class LiveAudioService {
             kbBlock,
         ].filter(Boolean).join('\n');
 
-        // CRITICAL: Raw WebSocket protocol requires camelCase.
-        // "systemInstruction" NOT "system_instruction"
-        // transcription configs go at setup level, NOT inside generationConfig
         this._wsSend({
             setup: {
                 model: MODEL,
                 generationConfig: {
                     responseModalities: ['AUDIO'],
-                    speechConfig: {
-                        voiceConfig: {
-                            prebuiltVoiceConfig: { voiceName: voice_id || 'Puck' }
-                        }
-                    },
+                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice_id || 'Puck' } } },
+                    thinkingConfig: { thinkingBudget: 0 },
                 },
-                systemInstruction: {
-                    parts: [{ text: sysText }]
+                systemInstruction: { parts: [{ text: sysText }] },
+                contextWindowCompression: {
+                    triggerTokens: String(CTX_TRIGGER_TOKENS),
+                    slidingWindow: { targetTokens: String(CTX_TARGET_TOKENS) },
                 },
-                inputAudioTranscription: {},
+                sessionResumption: this._resumptionToken ? { handle: this._resumptionToken } : {},
                 outputAudioTranscription: {},
             }
         });
 
-        console.log('[LA] Setup sent — model:', MODEL, '| KB:', kb.length, 'chars');
+        console.log(`[LA] Gemini setup sent | KB: ${kb.length} chars | STT: ${this._sttProvider || 'pending'}`);
+    }
+
+    _sendGreeting() {
+        this._sendToGemini('Greet me warmly in Tanglish, say your name and role, ask how you can help. Max 2 sentences.');
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // GREETING (FIX #1: must include turns array with content)
+    // RECORDING — Async call recording (non-blocking)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    _sendGreeting() {
-        // Gemini requires a valid clientContent with turns array.
-        // A bare { turnComplete: true } without turns → "invalid argument" error.
+    _initializeRecorder(agentId, callerId = null) {
+        try {
+            this._recorder = new CallRecordingSDK(agentId, callerId);
+            this._recordingStartTime = Date.now();
+
+            // Start recording session
+            this._recorder.startSession().then(() => {
+                console.log('[LA] 🔴 Recording started (async, non-blocking)');
+            }).catch(e => {
+                console.warn('[LA] Error starting recording:', e);
+            });
+        } catch (e) {
+            console.warn('[LA] Could not initialize recorder:', e);
+        }
+    }
+
+    async _recordTranscript(role, text, timestampMs = null) {
+        if (!this._recorder) return;
+        try {
+            await this._recorder.addTranscript(role, text, timestampMs);
+        } catch (e) {
+            console.warn('[LA] Error recording transcript:', e);
+        }
+    }
+
+    async _recordAudio(pcmI16Bytes) {
+        if (!this._recorder) return;
+        try {
+            await this._recorder.addAudio(pcmI16Bytes);
+        } catch (e) {
+            console.warn('[LA] Error recording audio:', e);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STT CONNECTION — Sarvam primary, Deepgram fallback
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    async _connectSTT() {
+        const onTranscript  = (text, isFinal) => this._onSTTTranscript(text, isFinal);
+        const onSpeechStart = () => this._onSTTSpeechStart();
+        const onSpeechEnd   = () => this._onSTTSpeechEnd();
+
+        // Try Sarvam first
+        if (this._sarvamKey) {
+            try {
+                const sarvam = new SarvamSTT(this._sarvamKey, onTranscript, onSpeechStart, onSpeechEnd, () => {
+                    console.warn('[LA] Sarvam STT died → falling back to Deepgram');
+                    this._fallbackToDeepgram(onTranscript, onSpeechStart, onSpeechEnd);
+                });
+                await sarvam.connect();
+                this._stt = sarvam;
+                this._sttProvider = 'sarvam';
+                console.log('[LA] 🎯 STT: Sarvam AI (codemix for Tanglish)');
+                return;
+            } catch (e) {
+                console.warn('[LA] Sarvam connect failed:', e.message);
+            }
+        }
+
+        // Fall back to Deepgram
+        await this._fallbackToDeepgram(onTranscript, onSpeechStart, onSpeechEnd);
+    }
+
+    async _fallbackToDeepgram(onTranscript, onSpeechStart, onSpeechEnd) {
+        if (!this._deepgramKey) {
+            console.error('[LA] ❌ No Deepgram key either — STT unavailable');
+            this._emit('onError', new Error('No STT provider available'));
+            return;
+        }
+
+        try {
+            const dg = new DeepgramSTT(this._deepgramKey, onTranscript, onSpeechStart, onSpeechEnd, () => {
+                console.error('[LA] ❌ Deepgram STT also died');
+            });
+            await dg.connect();
+            this._stt = dg;
+            this._sttProvider = 'deepgram';
+            console.log('[LA] 🔄 STT: Deepgram Nova-3 (fallback)');
+        } catch (e) {
+            console.error('[LA] Deepgram connect failed:', e.message);
+            this._emit('onError', new Error('All STT providers failed'));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STT CALLBACKS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    _onSTTSpeechStart() {
+        this._userSpeaking = true;
+
+        // Interrupt agent if playing
+        if (this._playing) {
+            console.log('[LA] 🎤 User speaking → interrupt agent');
+            this._player.stop();
+            this._playing             = false;
+            this._turnInterrupted     = true;
+            this._discardUntilNewTurn = true;
+        }
+    }
+
+    _onSTTSpeechEnd() {
+        this._userSpeaking = false;
+    }
+
+    _onSTTTranscript(text, isFinal) {
+        if (this._muted || !this._live) return;
+
+        // Show interim/final transcription to user
+        this._emit('onTranscription', text, true);
+
+        if (isFinal && text.trim()) {
+            this._finalText += (this._finalText ? ' ' : '') + text.trim();
+
+            // Debounce: wait for user to fully stop, then send
+            if (this._sendTimer) clearTimeout(this._sendTimer);
+            this._sendTimer = setTimeout(() => {
+                const toSend = this._finalText.trim();
+                this._finalText = '';
+                if (!toSend) return;
+
+                // Record user transcript (async, fire-and-forget)
+                const timestampMs = (Date.now() - this._recordingStartTime);
+                this._recordTranscript('user', toSend, timestampMs);
+
+                console.log(`[LA] 📝 Sending: "${toSend}" [via ${this._sttProvider}]`);
+                this._lastSendTime = Date.now();
+                this._lastAudioRcvTime = 0;
+                this._emit('onTranscription', toSend, true);
+                this._sendToGemini(toSend);
+            }, SEND_DEBOUNCE_MS);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SEND TEXT TO GEMINI
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    _sendToGemini(text) {
+        if (!text?.trim() || this._ws?.readyState !== WebSocket.OPEN) return;
         this._wsSend({
             clientContent: {
-                turns: [{
-                    role: 'user',
-                    parts: [{
-                        text: 'Greet me warmly in Tanglish, say your name and role, ask how you can help. Max 2 sentences.'
-                    }]
-                }],
+                turns: [{ role: 'user', parts: [{ text: text.trim() }] }],
                 turnComplete: true,
             }
         });
-        console.log('[LA] Greeting prompt sent');
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // SERVER CONTENT (FIX #2: interrupt-safe audio discard)
+    // SERVER CONTENT
     // ═══════════════════════════════════════════════════════════════════════════
 
     _handleServerContent(msg) {
         const sc = msg.serverContent || msg.server_content;
         if (!sc) return;
 
-        // Server acknowledged interrupt
         if (sc.interrupted) {
-            console.log('[LA] Server: interrupted');
             this._player.stop();
             this._playing = false;
-            // FIX #2: keep discarding until the old turn fully completes.
             this._discardUntilNewTurn = true;
             this._emit('onInterrupted');
             return;
         }
 
-        // Audio/text from model
         const parts = sc.modelTurn?.parts || sc.model_turn?.parts || [];
         for (const p of parts) {
             const d = p.inlineData || p.inline_data;
             const mime = d?.mimeType || d?.mime_type || '';
             if (mime.startsWith('audio/pcm')) {
-                // FIX #2: discard audio from interrupted/stale turns
                 if (this._discardUntilNewTurn || this._turnInterrupted) continue;
+
+                if (!this._lastAudioRcvTime && this._lastSendTime) {
+                    const lat = Date.now() - this._lastSendTime;
+                    console.log(`[LA] ⏱️ LATENCY: ${lat}ms (turn #${this._turnCount + 1}) [${this._sttProvider}]`);
+                    this._lastAudioRcvTime = Date.now();
+                }
+
                 this._playing = true;
                 this._player.play(fromB64(d.data));
             }
         }
 
-        // Turn complete
         if (sc.turnComplete || sc.turn_complete) {
+            this._turnCount++;
             this._playing = false;
-            // FIX #2: NOW safe to accept audio from the next turn
             this._turnInterrupted = false;
             this._discardUntilNewTurn = false;
+            this._lastSendTime = 0;
+            this._lastAudioRcvTime = 0;
+            const elapsed = ((Date.now() - this._sessionStartTime) / 1000).toFixed(0);
+            console.log(`[LA] ✅ Turn #${this._turnCount} (${elapsed}s) [${this._sttProvider}]`);
             this._emit('onTurnComplete');
         }
 
-        // User transcription
-        const itx = sc.inputTranscription || sc.input_transcription;
-        if (itx?.text && this._mode === 'chat') {
-            this._emit('onTranscription', itx.text, true);
-        }
-
-        // Agent transcription (suppress if discarding stale turn)
         const otx = sc.outputTranscription || sc.output_transcription;
         if (otx?.text) {
+            // Record agent transcript (async, fire-and-forget)
+            const timestampMs = (Date.now() - this._recordingStartTime);
+            this._recordTranscript('agent', otx.text, timestampMs);
+
             if (!this._discardUntilNewTurn && this._mode === 'chat') {
                 this._emit('onTranscription', otx.text, false);
             }
             if (otx.text.includes('[END_CALL]')) {
-                console.log('[LA] Agent confirmed call end');
                 this._emit('onCallEnd');
             }
         }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // MICROPHONE (FIX #3 VAD, FIX #4 echo gate, FIX #5 no manual turnComplete)
+    // MICROPHONE — streams PCM to STT provider (NOT to Gemini)
     // ═══════════════════════════════════════════════════════════════════════════
 
     async _startMic() {
-        this._lastWasSpeech = false;
-        this._vadSilenceFrames = 0;
-        this._vadConsecutiveSpeech = 0;
-        this._speechStartTime = 0;
-
         const AC = window.AudioContext || window.webkitAudioContext;
         if (!LiveAudioService._sharedMicCtx) {
             LiveAudioService._sharedMicCtx = new AC({ sampleRate: MIC_RATE });
-            console.log('[LA] Created shared mic AudioContext');
         }
         this._micCtx = LiveAudioService._sharedMicCtx;
         if (this._micCtx.state === 'suspended') await this._micCtx.resume();
 
         if (!LiveAudioService._sharedWorkletReady) {
-            const blob = new Blob([WORKLET_SRC], { type: 'application/javascript' });
-            const url  = URL.createObjectURL(blob);
-            await this._micCtx.audioWorklet.addModule(url);
+            await this._micCtx.audioWorklet.addModule(WORKLET_URL);
             LiveAudioService._sharedWorkletReady = true;
-            console.log('[LA] Worklet loaded');
         }
 
         this._stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                channelCount: 1, sampleRate: MIC_RATE,
-                echoCancellation: true, noiseSuppression: true, autoGainControl: true,
-            }
+            audio: { channelCount: 1, sampleRate: MIC_RATE, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
         });
 
         this._source = this._micCtx.createMediaStreamSource(this._stream);
 
         if (!LiveAudioService._sharedWorkletNode) {
-            LiveAudioService._sharedWorkletNode = new AudioWorkletNode(this._micCtx, 'capture-proc');
-            console.log('[LA] Created shared worklet node');
+            LiveAudioService._sharedWorkletNode = new AudioWorkletNode(this._micCtx, 'capture-proc', { processorOptions: { chunk: WORKLET_CHUNK } });
         }
         this._worklet = LiveAudioService._sharedWorkletNode;
 
-        // ── Audio processing loop ────────────────────────────────────────
+        // Stream mic audio to STT provider (NOT to Gemini)
         this._worklet.port.onmessage = (ev) => {
             if (this._micCtx?.state === 'suspended') this._micCtx.resume();
-            if (!this._live || this._muted || this._ws?.readyState !== WebSocket.OPEN) return;
+            if (!this._live || this._muted) return;
 
             const f32 = ev.data;
-            const pcm = new Uint8Array(f32ToI16(f32).buffer);
+            const i16 = f32ToI16(f32);
 
-            // FIX #4: ECHO GATE — skip VAD while agent plays and user hasn't started
-            if (this._playing && !this._lastWasSpeech) {
-                this._sendAudio(pcm);
-                return;
+            // Send raw PCM to STT
+            if (this._stt?.isAlive) {
+                this._stt.sendAudio(new Uint8Array(i16.buffer));
             }
 
-            const isSpeech = this._detectSpeech(f32);
-
-            // Speech START → interrupt agent
-            if (isSpeech && !this._lastWasSpeech) {
-                this._speechStartTime = Date.now();
-                this._lastWasSpeech = true;
-                console.log('[LA] 🎤 Speech start — interrupting agent');
-                this._player.stop();
-                this._turnInterrupted = true;
-                this._discardUntilNewTurn = true;
-                this._playing = false;
-            }
-
-            // Speech END (FIX #3: 12-frame silence, FIX #5: no manual turnComplete)
-            if (!isSpeech && this._lastWasSpeech && this._vadSilenceFrames >= VAD_SILENCE_FRAMES) {
-                const dur = Date.now() - this._speechStartTime;
-                if (dur >= VAD_MIN_SPEECH_MS) {
-                    console.log(`[LA] 🔇 Speech ended (${dur}ms) — Gemini will process`);
-                }
-                this._lastWasSpeech = false;
-            }
-
-            this._sendAudio(pcm);
+            // Record audio (async, fire-and-forget)
+            this._recordAudio(new Uint8Array(i16.buffer));
         };
-
-        // Keepalive
-        this._keepalive = setInterval(() => {
-            if (!this._live || this._ws?.readyState !== WebSocket.OPEN) return;
-            this._sendAudio(new Uint8Array(256));
-        }, 8000);
 
         if (!this._source._isConnected) {
             this._source.connect(this._worklet);
             this._source._isConnected = true;
         }
-        console.log('[LA] Mic started');
+        console.log('[LA] 🎤 Mic started → streaming to STT');
     }
 
     _stopMic() {
-        if (this._keepalive) { clearInterval(this._keepalive); this._keepalive = null; }
         if (this._worklet) { try { this._worklet.disconnect(); } catch (_) {} }
         if (this._stream) { this._stream.getTracks().forEach(t => t.stop()); this._stream = null; }
         this._source = null;
-    }
-
-    _sendAudio(pcmU8) {
-        this._wsSend({
-            realtimeInput: {
-                mediaChunks: [{ mimeType: `audio/pcm;rate=${MIC_RATE}`, data: toB64(pcmU8) }]
-            }
-        });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // VAD (FIX #3: tuned for Tamil/Tanglish)
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    _detectSpeech(f32) {
-        if (!f32 || !f32.length) return false;
-
-        let sum = 0;
-        for (let i = 0; i < f32.length; i++) sum += f32[i] * f32[i];
-        const rms = Math.sqrt(sum / f32.length);
-        const isSpeech = rms > VAD_THRESHOLD;
-
-        if (isSpeech) {
-            this._vadSilenceFrames = 0;
-            this._vadConsecutiveSpeech++;
-        } else {
-            this._vadSilenceFrames++;
-            if (this._vadSilenceFrames > VAD_SILENCE_FRAMES) {
-                this._vadConsecutiveSpeech = 0;
-            }
-        }
-
-        return isSpeech && this._vadConsecutiveSpeech >= VAD_MIN_SPEECH_FRAMES;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

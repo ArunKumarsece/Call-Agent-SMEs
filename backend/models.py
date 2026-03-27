@@ -209,3 +209,39 @@ class CallSession(Base):
 
     agent        = relationship("Agent")
     company      = relationship("Company")
+    analysis     = relationship("CallAnalysis", back_populates="session", uselist=False, cascade="all, delete-orphan")
+    audio_file   = relationship("CallAudio", back_populates="session", uselist=False, cascade="all, delete-orphan")
+
+
+# ─── CallAudio (audio file references) ────────────────────────────────────────
+
+class CallAudio(Base):
+    __tablename__ = "call_audio"
+
+    id           = Column(String, primary_key=True, default=generate_uuid)
+    session_id   = Column(String, ForeignKey("call_sessions.id", ondelete="CASCADE"), nullable=False)
+    file_path    = Column(Text, nullable=False)              # S3 or local path
+    file_format  = Column(String(20), default="wav")        # wav | mp3 | pcm
+    duration_sec = Column(Integer, default=0)
+    size_bytes   = Column(Integer, default=0)
+    created_at   = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    session      = relationship("CallSession", back_populates="audio_file")
+
+
+# ─── CallAnalysis (emotion + intent analysis) ────────────────────────────────
+
+class CallAnalysis(Base):
+    __tablename__ = "call_analysis"
+
+    id           = Column(String, primary_key=True, default=generate_uuid)
+    session_id   = Column(String, ForeignKey("call_sessions.id", ondelete="CASCADE"), nullable=False)
+    emotion_timeline = Column(JSON, nullable=True)           # [{sec, emotion, confidence}]
+    overall_emotion  = Column(String(50), nullable=True)    # positive | neutral | negative
+    user_satisfaction = Column(Integer, default=0)          # 0-100
+    info_completion  = Column(Integer, default=0)           # 0-100: Did they get what they asked?
+    key_intents  = Column(JSON, nullable=True)              # ["booking", "support", ...]
+    summary      = Column(Text, nullable=True)              # LLM-generated summary
+    analyzed_at  = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    session      = relationship("CallSession", back_populates="analysis")

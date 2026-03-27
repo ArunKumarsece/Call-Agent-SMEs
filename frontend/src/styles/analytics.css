@@ -1,0 +1,375 @@
+/* Call Analytics Styles */
+
+.call-history {
+  padding: 20px;
+  background: #f5f7fa;
+  border-radius: 8px;
+  margin: 20px 0;
+}
+
+.call-history h2 {
+  margin-top: 0;
+  color: #1a1a1a;
+  font-size: 1.5rem;
+  margin-bottom: 20px;
+}
+
+.calls-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.call-item {
+  padding: 12px;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.call-item:hover {
+  background: #f9fafb;
+  border-color: #3b82f6;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.1);
+}
+
+.call-item.selected {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  box-shadow: 0 2px 12px rgba(59, 130, 246, 0.2);
+}
+
+.call-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.agent-name {
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.call-time {
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.call-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 0.85rem;
+}
+
+.status {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.status.completed {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.status.active {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.duration {
+  color: #666;
+}
+
+.sentiment {
+  font-weight: 500;
+}
+
+.sentiment.positive {
+  color: #15803d;
+}
+
+.sentiment.neutral {
+  color: #7c3aed;
+}
+
+.sentiment.negative {
+  color: #991b1b;
+}
+
+/* Modal */
+
+.call-detail-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+
+.modal-content {
+  position: relative;
+  background: white;
+  border-radius: 12px;
+  padding: 30px;
+  max-width: 700px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.close-btn {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: #666;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-btn:hover {
+  color: #333;
+}
+
+.modal-content h3 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  color: #1a1a1a;
+}
+
+/* Metrics Grid */
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 20px;
+  margin-bottom: 30px;
+  padding: 20px;
+  background: #f9fafb;
+  border-radius: 8px;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+}
+
+.metric label {
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+}
+
+.meter {
+  width: 100%;
+  height: 20px;
+  background: #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.meter-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #ec4899);
+  transition: width 0.3s ease;
+}
+
+.metric > span {
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.sentiment-label {
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-weight: 600;
+  display: inline-block;
+  width: fit-content;
+}
+
+.sentiment-label.positive {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.sentiment-label.neutral {
+  background: #f3e8ff;
+  color: #6b21a8;
+}
+
+.sentiment-label.negative {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+/* Emotion Timeline */
+
+.emotion-timeline {
+  margin-bottom: 30px;
+  padding: 20px;
+  background: #f9fafb;
+  border-radius: 8px;
+}
+
+.emotion-timeline h4 {
+  margin-top: 0;
+  color: #1a1a1a;
+  margin-bottom: 15px;
+}
+
+/* Intents */
+
+.intents {
+  margin-bottom: 30px;
+}
+
+.intents h4 {
+  color: #1a1a1a;
+  margin-bottom: 12px;
+}
+
+.intent-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.intent-tag {
+  padding: 6px 12px;
+  background: #dbeafe;
+  color: #1e40af;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+/* Summary */
+
+.summary {
+  padding: 20px;
+  background: #fef3c7;
+  border-left: 4px solid #f59e0b;
+  border-radius: 6px;
+}
+
+.summary h4 {
+  margin-top: 0;
+  color: #92400e;
+}
+
+.summary p {
+  margin: 0;
+  color: #78350f;
+  line-height: 1.6;
+}
+
+/* Agent Analytics */
+
+.agent-analytics {
+  padding: 20px;
+  background: #f5f7fa;
+  border-radius: 8px;
+  margin: 20px 0;
+}
+
+.agent-analytics h2 {
+  margin-top: 0;
+  color: #1a1a1a;
+  margin-bottom: 20px;
+}
+
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.card {
+  padding: 20px;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  border-color: #3b82f6;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.1);
+}
+
+.card .icon {
+  font-size: 2rem;
+}
+
+.card h4 {
+  margin: 0 0 4px 0;
+  color: #666;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.card .value {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1a1a1a;
+}
+
+/* Charts */
+
+.chart-container {
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.chart-container h3 {
+  margin-top: 0;
+  color: #1a1a1a;
+}
+
+/* Empty State */
+
+.empty-state {
+  text-align: center;
+  color: #999;
+  padding: 40px 20px;
+  font-style: italic;
+}
+
+.analytics-loading {
+  text-align: center;
+  padding: 40px 20px;
+  color: #666;
+}

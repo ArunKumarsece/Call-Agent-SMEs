@@ -143,7 +143,11 @@ export default function VoiceCallWidget({ agentId, agentName, agent }) {
                     setStatusDebounced('🗣️ Agent speaking');
                 }
             },
-        }, { mode });
+        }, { 
+            mode,
+            recordingEnabled: true,  // Enable recording for all calls
+            callerId: null  // Can be set to user email/ID for tracking
+        });
 
         if (!success) {
             setConnecting(false);

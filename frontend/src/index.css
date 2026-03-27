@@ -1640,3 +1640,74 @@ tbody tr:hover { background: rgba(255,255,255,0.025); }
   .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
   .dashboard-metrics { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ─── CreateAgent Utility Classes ────────────────────────────── */
+.card-subtitle {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+/* Generic block form-group that auto-styles child inputs */
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.form-field > label,
+.form-field label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: .01em;
+}
+.form-field > input,
+.form-field > textarea,
+.form-field > select {
+  width: 100%;
+  padding: 9px 13px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-primary);
+  font-size: 0.87rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--t-fast), background var(--t-fast);
+  -webkit-appearance: none;
+  appearance: none;
+}
+.form-field > input:focus,
+.form-field > textarea:focus,
+.form-field > select:focus {
+  border-color: var(--accent);
+  background: var(--bg-elevated);
+}
+.form-field > textarea { resize: vertical; min-height: 80px; }
+.form-field > select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235a6080' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 34px;
+}
+
+.form-hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* Spinner inside button */
+.btn-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+

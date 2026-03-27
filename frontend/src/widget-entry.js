@@ -470,7 +470,7 @@ import { LiveAudioService } from './services/liveAudioService';
                     setStatus('Agent speaking…', 'live');
                 }
             },
-        }, { mode, recordingEnabled: true, callerId: null });
+        }, { mode, recordingEnabled: true, callerId: null, apiBase: SERVER_URL });
 
         if (!ok) {
             connecting = false;

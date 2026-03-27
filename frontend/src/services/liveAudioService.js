@@ -571,7 +571,8 @@ export class LiveAudioService {
 
         try {
             this._player.prime();
-            const API = getAPIBase();
+            // Allow external widgets to pass their own backend URL
+            const API = options.apiBase ? `${options.apiBase}/api` : getAPIBase();
 
             // Fetch Gemini key + STT keys from backend + KB in parallel
             // ENV_ vars used as local-dev fallback only

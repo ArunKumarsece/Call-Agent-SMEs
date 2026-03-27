@@ -6,7 +6,12 @@
     <title>AI Voice Agent — Widget Demo</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
         body {
             font-family: 'Inter', -apple-system, sans-serif;
             background: linear-gradient(135deg, #0f172a, #1e293b);
@@ -19,8 +24,19 @@
             text-align: center;
             padding: 24px;
         }
-        h1 { font-size: 2.5rem; margin-bottom: 12px; }
-        p { opacity: 0.7; font-size: 1.1rem; max-width: 500px; line-height: 1.6; }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 12px;
+        }
+
+        p {
+            opacity: 0.7;
+            font-size: 1.1rem;
+            max-width: 500px;
+            line-height: 1.6;
+        }
+
         .badge {
             display: inline-block;
             margin-top: 24px;
@@ -31,19 +47,24 @@
             font-size: 0.85rem;
             color: #a5b4fc;
         }
+
         .instructions {
             margin-top: 40px;
             padding: 20px 28px;
-            background: rgba(255,255,255,0.05);
-            border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 12px;
             text-align: left;
             max-width: 520px;
             font-size: 0.9rem;
             line-height: 1.8;
-            color: rgba(255,255,255,0.7);
+            color: rgba(255, 255, 255, 0.7);
         }
-        .instructions strong { color: #a5b4fc; }
+
+        .instructions strong {
+            color: #a5b4fc;
+        }
+
         code {
             background: rgba(108, 99, 255, 0.15);
             padding: 2px 6px;
@@ -56,7 +77,8 @@
 <body>
 
     <h1>Welcome to Our Website</h1>
-    <p>This is an example page with the AI Voice Agent widget embedded. Click the 🎤 button at the bottom-right to talk to the AI agent.</p>
+    <p>This is an example page with the AI Voice Agent widget embedded. Click the 🎤 button at the bottom-right to talk
+        to the AI agent.</p>
     <div class="badge">Widget Demo</div>
 
     <div class="instructions">
@@ -68,20 +90,21 @@
     </div>
 
     <!-- ═══ AI Voice Agent Widget ═══ -->
-  <!-- AI Voice Agent Widget — Mark -->
-<!-- AI Voice Agent Widget: Mark -->
-<script>
-  window.AgentWidgetConfig = {
-    agentId: "56919600-738d-4fa9-9ac9-fe43b34f5c1e",
-    serverUrl: "http://localhost:8000",
-    theme: "dark",
-    position: "bottom-right",
-    title: "Mark",
-    subtitle: "Live voice call with AI",
-    primaryColor: "#6366f1"
-  };
-</script>
-<script src="http://localhost:8000/static/widget/agent-widget.js" async></script>
+    <!-- AI Voice Agent Widget — Mark -->
+    <!-- AI Voice Agent Widget: Mark -->
+    <!-- AI Voice Agent Widget: Mark -->
+    <script>
+        window.AgentWidgetConfig = {
+            agentId: "56919600-738d-4fa9-9ac9-fe43b34f5c1e",
+            serverUrl: "https://call-agent-smes.onrender.com",
+            theme: "dark",
+            position: "bottom-right",
+            title: "Mark",
+            subtitle: "Live voice call with AI",
+            primaryColor: "#6366f1"
+        };
+    </script>
+    <script src="https://call-agent-smes.onrender.com/static/widget/agent-widget.js" async></script>
 
 </body>
 

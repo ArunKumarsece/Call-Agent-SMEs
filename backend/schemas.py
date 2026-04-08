@@ -124,6 +124,7 @@ class AgentCreate(BaseModel):
     system_prompt: Optional[str] = Field("", max_length=5000)
     voice_id: Optional[str] = Field("Puck", max_length=50)
     language: Optional[str] = Field("tanglish", max_length=30)
+    hospital_config: Optional[dict] = Field(None)  # {sheet_id_1, sheet_id_2, credentials_json, enabled}
 
 
 class AgentUpdate(BaseModel):
@@ -133,6 +134,7 @@ class AgentUpdate(BaseModel):
     system_prompt: Optional[str] = Field(None, max_length=5000)
     voice_id: Optional[str] = Field(None, max_length=50)
     language: Optional[str] = Field(None, max_length=30)
+    hospital_config: Optional[dict] = Field(None)
 
 
 class AgentResponse(BaseModel):
@@ -143,6 +145,7 @@ class AgentResponse(BaseModel):
     system_prompt: Optional[str]
     voice_id: str
     language: str
+    hospital_config: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
     kb_count: Optional[int] = 0
@@ -310,3 +313,109 @@ class AnalyticsResponse(BaseModel):
     status_distribution: dict
     calls_by_day: List[dict]
     calls_by_agent: List[dict]
+
+
+# ─── Hospital System: Doctor Schemas ─────────────────────────
+
+class DoctorCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    specialization: str = Field(..., min_length=1, max_length=255)
+    license_number: Optional[str] = Field(None, max_length=100)
+    phone: Optional[str] = Field(None, max_length=20)
+    email: Optional[str] = Field(None, max_length=255)
+    bio: Optional[str] = Field(None, max_length=1000)
+    years_experience: int = Field(default=0, ge=0)
+    avatar_url: Optional[str] = Field(None)
+
+
+class DoctorUpdate(BaseModel):
+    name: Optional[str] = Field(None, max_length=255)
+    specialization: Optional[str] = Field(None, max_length=255)
+    license_number: Optional[str] = Field(None, max_length=100)
+    phone: Optional[str] = Field(None, max_length=20)
+    email: Optional[str] = Field(None, max_length=255)
+    bio: Optional[str] = Field(None, max_length=1000)
+    years_experience: Optional[int] = Field(None, ge=0)
+    avatar_url: Optional[str] = Field(None)
+    is_active: Optional[bool] = None
+
+
+class DoctorResponse(BaseModel):
+    id: str
+    name: str
+    specialization: str
+    license_number: Optional[str]
+    phone: Optional[str]
+    email: Optional[str]
+    bio: Optional[str]
+    years_experience: int
+    avatar_url: Optional[str]
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Hospital System: Time Slot Schemas ─────────────────────
+
+class DoctorTimeSlotCreate(BaseModel):
+    day_of_week: int = Field(..., ge=0, le=6)  # 0=Monday, 6=Sunday
+    start_time: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    end_time: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    slot_duration_min: int = Field(default=30, ge=15, le=120)
+    max_patients: int = Field(default=1, ge=1)
+    notes: Optional[str] = None
+
+    @field_validator('start_time', 'end_time')
+    def validate_time_format(cls, v):
+        if not re.match(r"^\d{2}:\d{2}$", v):
+            raise ValueError("Time must be in HH:MM format")
+        return v
+
+
+class DoctorTimeSlotResponse(BaseModel):
+    id: str
+    doctor_id: str
+    day_of_week: int
+    start_time: str
+    end_time: str
+    slot_duration_min: int
+    is_available: bool
+    max_patients: int
+    notes: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Hospital System: Appointment Schemas ───────────────────
+
+class AppointmentCreate(BaseModel):
+    doctor_id: str
+    patient_name: str = Field(..., min_length=1, max_length=255)
+    patient_phone: str = Field(..., min_length=5, max_length=20)
+    patient_email: Optional[str] = Field(None, max_length=255)
+    appointment_date: datetime
+    reason: Optional[str] = Field(None, max_length=1000)
+
+
+class AppointmentUpdate(BaseModel):
+    status: Optional[str] = Field(None, pattern="^(scheduled|confirmed|completed|cancelled|no-show)$")
+    reason: Optional[str] = Field(None, max_length=1000)
+    notes: Optional[str] = Field(None, max_length=2000)
+    is_confirmed: Optional[bool] = None
+
+
+class AppointmentResponse(BaseModel):
+    id: str
+    doctor_id: str
+    patient_name: str
+    patient_phone: str
+    patient_email: Optional[str]
+    appointment_date: datetime
+    status: str
+    reason: Optional[str]
+    is_confirmed: bool
+
+    class Config:
+        from_attributes = True

@@ -146,6 +146,7 @@ function AppRoutes() {
                         <Route path="/analytics"          element={<PrivateRoute><Analytics /></PrivateRoute>} />
                         <Route path="/calls"              element={<PrivateRoute><CallHistory /></PrivateRoute>} />
                         <Route path="/billing"            element={<PrivateRoute><Billing /></PrivateRoute>} />
+
                         <Route path="/agents/new"        element={<PrivateRoute><CreateAgent /></PrivateRoute>} />
                         <Route path="/agents/:id"        element={<PrivateRoute><AgentDetail /></PrivateRoute>} />
                         <Route path="/agents/:id/edit"   element={<PrivateRoute><EditAgent /></PrivateRoute>} />

@@ -88,7 +88,61 @@ Respond with ONLY the JSON object, no other text."""
         except Exception as e:
             logger.error(f"[CallAnalyzer] Error analyzing session {session.id}: {e}")
             return self._empty_analysis()
+    async def generate_sentiment_summary(self, analysis: Dict[str, Any]) -> str:
+        """
+        Generate a concise sentiment summary from the analysis.
+        Returns a human-readable summary of the call's emotional trajectory.
+        
+        Example: "Call started positive but declined to neutral. Customer satisfaction was 75%."
+        """
+        emotion_timeline = analysis.get("emotion_timeline", [])
+        overall_emotion = analysis.get("overall_emotion", "neutral")
+        satisfaction = analysis.get("user_satisfaction", 0)
+        info_completion = analysis.get("info_completion", 0)
+        intents = analysis.get("key_intents", [])
 
+        # Build summary components
+        components = []
+
+        # 1. Emotional trajectory
+        if len(emotion_timeline) > 1:
+            first_emotion = emotion_timeline[0].get("emotion", "neutral")
+            last_emotion = emotion_timeline[-1].get("emotion", "neutral")
+            if first_emotion != last_emotion:
+                components.append(f"Call sentiment shifted from {first_emotion} to {last_emotion}")
+            else:
+                components.append(f"Call maintained {overall_emotion} sentiment throughout")
+        elif emotion_timeline:
+            components.append(f"Call remained {overall_emotion}")
+
+        # 2. Satisfaction level
+        if satisfaction >= 80:
+            satisfaction_desc = "very satisfied"
+        elif satisfaction >= 60:
+            satisfaction_desc = "generally satisfied"
+        elif satisfaction >= 40:
+            satisfaction_desc = "somewhat satisfied"
+        else:
+            satisfaction_desc = "dissatisfied"
+        components.append(f"Customer was {satisfaction_desc} ({satisfaction}% satisfaction)")
+
+        # 3. Information provided
+        if info_completion >= 80:
+            info_desc = "received all requested information"
+        elif info_completion >= 60:
+            info_desc = "received most information needed"
+        elif info_completion >= 40:
+            info_desc = "received partial information"
+        else:
+            info_desc = "did not receive sufficient information"
+        components.append(f"Customer {info_desc}")
+
+        # 4. Primary intents
+        if intents:
+            intent_str = ", ".join(intents[:2])
+            components.append(f"Main issues: {intent_str}")
+
+        return " | ".join(components)
     def _format_transcript(self, transcript: List[Dict]) -> str:
         """Format transcript for readability."""
         lines = []

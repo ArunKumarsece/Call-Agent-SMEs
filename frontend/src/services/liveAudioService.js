@@ -571,25 +571,25 @@ export class LiveAudioService {
 
         try {
             this._player.prime();
-            // Allow external widgets to pass their own backend URL
-            const API = options.apiBase ? `${options.apiBase}/api` : getAPIBase();
+            const API = getAPIBase();
 
-            // Fetch Gemini key + STT keys from backend + KB in parallel
-            // ENV_ vars used as local-dev fallback only
-            const [geminiKey, sarvamKeyFromBackend, deepgramKeyFromBackend] = await Promise.all([
+            // Fetch Gemini key from backend + KB in parallel
+            // STT keys come from env vars (switch to endpoint later)
+            const [geminiKey] = await Promise.all([
                 this._fetchKey(API, 'gemini-key'),
-                this._fetchKey(API, 'sarvam-key').catch(() => null),
-                this._fetchKey(API, 'deepgram-key').catch(() => null),
                 agentConfig.id ? this._loadKB(API, agentConfig.id) : Promise.resolve(),
             ]);
 
             this._geminiKey   = geminiKey;
-            // Prefer backend-fetched key; fall back to VITE_ env var for local dev
-            this._sarvamKey   = sarvamKeyFromBackend   || ENV_SARVAM_KEY;
-            this._deepgramKey = deepgramKeyFromBackend || ENV_DEEPGRAM_KEY;
+            this._sarvamKey   = ENV_SARVAM_KEY;
+            this._deepgramKey = ENV_DEEPGRAM_KEY;
+
+            // TODO: Later, switch to fetching from endpoints:
+            // this._sarvamKey   = await this._fetchKey(API, 'sarvam-key').catch(() => null);
+            // this._deepgramKey = await this._fetchKey(API, 'deepgram-key').catch(() => null);
 
             if (!this._sarvamKey && !this._deepgramKey) {
-                throw new Error('No STT API key found. Set SARVAM_API_KEY or DEEPGRAM_API_KEY in Render environment variables.');
+                throw new Error('No STT API key found. Set VITE_SARVAM_API_KEY or VITE_DEEPGRAM_API_KEY in .env');
             }
 
             console.log('[LA] STT keys:', this._sarvamKey ? '✅ Sarvam' : '❌ Sarvam', '|', this._deepgramKey ? '✅ Deepgram' : '❌ Deepgram');

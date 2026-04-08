@@ -173,6 +173,7 @@ from routers.auth import router as auth_router
 from routers.widget import router as widget_router
 from routers.analytics import router as analytics_router
 from routers.call_history import router as call_history_router
+from routers.hospital import router as hospital_router
 from services.gemini_service import AVAILABLE_VOICES
 import os
 import logging
@@ -278,6 +279,7 @@ app.include_router(voice_call.router)
 app.include_router(widget_router)
 app.include_router(analytics_router)
 app.include_router(call_history_router)
+app.include_router(hospital_router)
 
 
 # ─── Startup ──────────────────────────────────────────────

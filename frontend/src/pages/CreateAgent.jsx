@@ -161,6 +161,7 @@ export default function CreateAgent() {
   const [form, setForm] = useState({
     name: '', role: 'Customer Support', description: '',
     system_prompt: DEFAULT_PROMPT, voice_id: 'Puck', language: 'tanglish',
+    hospital_config: null,
   });
 
   const [persona, setPersona] = useState({
@@ -174,6 +175,14 @@ export default function CreateAgent() {
   const [uploadFiles, setUploadFiles] = useState([]);
   const [manualEntries, setManualEntries] = useState(['']);
   const [sheetsUrl, setSheetsUrl] = useState('');
+  
+  // Hospital Configuration
+  const [hospitalEnabled, setHospitalEnabled] = useState(false);
+  const [hospitalConfig, setHospitalConfig] = useState({
+    sheet_id_1: '', // Master data sheet
+    sheet_id_2: '', // Booking schedule sheet
+    credentials_json: '',
+  });
 
   useEffect(() => { loadVoices(); }, []);
 
@@ -219,7 +228,11 @@ export default function CreateAgent() {
         ? form.system_prompt.replace(new RegExp(`${PERSONA_HEADER}[\\s\\S]*?${PERSONA_FOOTER}`, 'g'), '').trim() + '\n\n' + personaBlock
         : form.system_prompt;
 
-      const agent = await agentsAPI.create({ ...form, system_prompt: sysPrompt });
+      const agent = await agentsAPI.create({ 
+        ...form, 
+        system_prompt: sysPrompt,
+        hospital_config: hospitalEnabled ? hospitalConfig : null,
+      });
       const kb = await kbAPI.create(agent.id, { name: kbName || 'Default KB', kb_type: kbType, source_url: kbType === 'dynamic' ? sheetsUrl : null });
 
       if (kbType === 'static') {
@@ -423,6 +436,67 @@ export default function CreateAgent() {
                     <input value={persona.avoid_topics}
                       onChange={e => setPersona({ ...persona, avoid_topics: e.target.value })}
                       placeholder="e.g., competitor names, sensitive pricing" />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Hospital Booking Configuration */}
+            <div className="card">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-md)' }}>
+                <div>
+                  <div className="card-title"><span style={{ marginRight: 8 }}>🏥</span>Hospital Booking (Optional)</div>
+                  <div className="card-subtitle">Enable appointment booking with Google Sheets</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setHospitalEnabled(!hospitalEnabled)}
+                  style={{
+                    padding: '6px 12px', borderRadius: 'var(--r-pill)',
+                    background: hospitalEnabled ? 'var(--teal)' : 'var(--bg-input)',
+                    color: '#fff', border: 'none', fontWeight: 600, cursor: 'pointer', fontSize: '0.75rem',
+                    transition: 'all .2s',
+                  }}>
+                  {hospitalEnabled ? '✓ Enabled' : 'Disabled'}
+                </button>
+              </div>
+
+              {hospitalEnabled && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+                  <div style={{ background: 'var(--bg-input)', padding: 'var(--space-md)', borderRadius: 'var(--r-md)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    📋 <strong>Sheet 1 (Master):</strong> Doctor names, specializations, available times<br/>
+                    📅 <strong>Sheet 2 (Bookings):</strong> Agent maintains appointment schedule, prevents double-booking
+                  </div>
+                  
+                  <div className="form-field">
+                    <label>Google Sheets ID #1 (Doctor Master Data)</label>
+                    <input
+                      value={hospitalConfig.sheet_id_1}
+                      onChange={e => setHospitalConfig({ ...hospitalConfig, sheet_id_1: e.target.value })}
+                      placeholder="e.g., 1a2b3c4d5e6f7g8h9i0j"
+                    />
+                    <span className="form-hint">Get from the URL: docs.google.com/spreadsheets/d/<strong>SHEET_ID</strong>/</span>
+                  </div>
+
+                  <div className="form-field">
+                    <label>Google Sheets ID #2 (Booking Schedule)</label>
+                    <input
+                      value={hospitalConfig.sheet_id_2}
+                      onChange={e => setHospitalConfig({ ...hospitalConfig, sheet_id_2: e.target.value })}
+                      placeholder="e.g., 1k2l3m4n5o6p7q8r9s0t"
+                    />
+                    <span className="form-hint">Sheet 2 will be auto-populated with booking records</span>
+                  </div>
+
+                  <div className="form-field">
+                    <label>Google Service Account JSON (Optional)</label>
+                    <textarea
+                      value={hospitalConfig.credentials_json}
+                      onChange={e => setHospitalConfig({ ...hospitalConfig, credentials_json: e.target.value })}
+                      placeholder="Paste your Google Service Account JSON here for API access"
+                      style={{ minHeight: 80, fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}
+                    />
+                    <span className="form-hint">Leave empty for user-shared sheets. Service account required for reliable write access.</span>
                   </div>
                 </div>
               )}

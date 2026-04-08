@@ -144,6 +144,8 @@ class Agent(Base):
     system_prompt = Column(Text, nullable=True)
     voice_id     = Column(String(100), default="Puck")
     language     = Column(String(50), default="tanglish")
+    # Hospital booking config (JSON): {sheet_id_1, sheet_id_2, enabled}
+    hospital_config = Column(JSON, nullable=True)
     created_at   = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at   = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                           onupdate=lambda: datetime.now(timezone.utc))
@@ -245,3 +247,4 @@ class CallAnalysis(Base):
     analyzed_at  = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     session      = relationship("CallSession", back_populates="analysis")
+

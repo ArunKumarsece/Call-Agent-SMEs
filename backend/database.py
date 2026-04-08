@@ -65,6 +65,7 @@ def get_db():
 
 
 def init_db():
-    """Create all tables (including new auth tables)."""
-    from models import Company, User, RefreshToken, Agent, KnowledgeBase, KBEntry, CallSession, CallAudio, CallAnalysis  # noqa
+    """Create all tables."""
+    from models import (Company, User, RefreshToken, Agent, KnowledgeBase, KBEntry,  # noqa
+                        CallSession, CallAudio, CallAnalysis)  # noqa
     Base.metadata.create_all(bind=engine)

@@ -544,8 +544,13 @@ async def get_agent_public(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     
+    print(f"[DEBUG] Agent {agent.id} hospital_config from DB: {agent.hospital_config}")
+    
     kb_count = db.query(KnowledgeBase).filter(KnowledgeBase.agent_id == agent.id).count()
-    return _agent_response(agent, kb_count)
+    response = _agent_response(agent, kb_count)
+    
+    print(f"[DEBUG] Response hospital_config: {response.hospital_config}")
+    return response
 
 
 @router.get("/public/{agent_id}/kb-context")
@@ -604,9 +609,17 @@ def _get_or_404(agent_id: str, company_id: str, db: Session) -> Agent:
 
 
 def _agent_response(agent: Agent, kb_count: int) -> AgentResponse:
-    return AgentResponse(
+    print(f"[AGENT_RESPONSE] Agent object: {agent}")
+    print(f"[AGENT_RESPONSE] agent.hospital_config from DB: {agent.hospital_config}")
+    print(f"[AGENT_RESPONSE] Type: {type(agent.hospital_config)}")
+    
+    resp = AgentResponse(
         id=agent.id, name=agent.name, role=agent.role,
         description=agent.description, system_prompt=agent.system_prompt,
         voice_id=agent.voice_id, language=agent.language,
+        hospital_config=agent.hospital_config,
         created_at=agent.created_at, updated_at=agent.updated_at, kb_count=kb_count,
     )
+    
+    print(f"[AGENT_RESPONSE] Response hospital_config: {resp.hospital_config}")
+    return resp

@@ -413,7 +413,7 @@ class DeepgramSTT {
             sample_rate: String(MIC_RATE),
             channels: '1',
             interim_results: 'true',
-            endpointing: '100',
+            endpointing: '1500',  // ✅ 1500ms (1.5s) silence before ending speech - allows longer natural pauses
             smart_format: 'true',
             punctuate: 'true',
         });
@@ -548,6 +548,11 @@ export class LiveAudioService {
         // Recording (via CallRecordingSDK)
         this._recorder         = null;
         this._recordingStartTime = 0;
+
+        // Booking detection
+        this._conversationHistory = [];
+        this._lastUserMessage = '';
+        this._lastAgentMessage = '';
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -560,6 +565,14 @@ export class LiveAudioService {
         this._mode  = options.mode || 'chat';
         this._stop  = false;
         this._live  = false;
+        
+        // DEBUG: Log agent config structure
+        console.log('[LA] 📋 Agent Config Received:', {
+            id: agentConfig?.id,
+            name: agentConfig?.name,
+            has_hospital_config: !!agentConfig?.hospital_config,
+            hospital_config: agentConfig?.hospital_config,
+        });
         this._playing             = false;
         this._turnInterrupted     = false;
         this._discardUntilNewTurn = false;
@@ -567,6 +580,7 @@ export class LiveAudioService {
         this._resumptionToken     = null;
         this._turnCount           = 0;
         this._sessionStartTime    = Date.now();
+        this._sessionId            = `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`; // Unique session ID
         this._finalText           = '';
 
         try {
@@ -794,7 +808,7 @@ export class LiveAudioService {
     // ═══════════════════════════════════════════════════════════════════════════
 
     _sendSetup() {
-        const { name, role, system_prompt, voice_id } = this._cfg || {};
+        const { name, role, system_prompt, voice_id, hospital_config } = this._cfg || {};
         const kb = this._kbContext || '';
 
         const kbBlock = kb ? [
@@ -806,6 +820,19 @@ export class LiveAudioService {
             '- If not in KB: say "Sorry, en kitta antha information illa" in Tanglish.',
         ].join('\n') : '';
 
+        // Hospital booking instructions (if enabled)
+        const hospitalBlock = (hospital_config?.enabled) ? [
+            '\n\nHOSPITAL APPOINTMENT BOOKING:',
+            'If user wants to book an appointment:',
+            '1. Ask for doctor name, preferred date, and time slot',
+            '2. Ask for patient name and phone number',
+            '3. Confirm all details clearly',
+            '4. When user confirms, ask "Seri, athan confirm pannalama?" (Tamil)',
+            '5. On confirmation, explicitly say "Appointment confirmed!" or similar',
+            'Your system will automatically save bookings to Google Sheets.',
+            'Example: "Appointment confirmed! நீங்கள் Dr. Priya Sharma with visit on 2026-04-15 at 10:00 AM"'
+        ].join('\n') : '';
+
         const sysText = [
             `You are ${name || 'AI'}, a ${role || 'assistant'}.`,
             'ALWAYS respond in Tanglish — a natural spoken mix of Tamil and English.',
@@ -815,6 +842,7 @@ export class LiveAudioService {
             'CALL ENDING: If user says bye/end call, ask "Seri, call end pannalama?" first.',
             'Only after user confirms, say goodbye and add [END_CALL] at the end.',
             system_prompt || '',
+            hospitalBlock,
             kbBlock,
         ].filter(Boolean).join('\n');
 
@@ -836,7 +864,7 @@ export class LiveAudioService {
             }
         });
 
-        console.log(`[LA] Gemini setup sent | KB: ${kb.length} chars | STT: ${this._sttProvider || 'pending'}`);
+        console.log(`[LA] Gemini setup sent | KB: ${kb.length} chars | Hospital: ${hospital_config?.enabled ? '✅' : '❌'} | STT: ${this._sttProvider || 'pending'}`);
     }
 
     _sendGreeting() {
@@ -925,7 +953,7 @@ export class LiveAudioService {
             await dg.connect();
             this._stt = dg;
             this._sttProvider = 'deepgram';
-            console.log('[LA] 🔄 STT: Deepgram Nova-3 (fallback)');
+            console.log('[LA] 🔄 STT: Deepgram Nova-3 (fallback) - endpointing: 1500ms for natural pauses');
         } catch (e) {
             console.error('[LA] Deepgram connect failed:', e.message);
             this._emit('onError', new Error('All STT providers failed'));
@@ -960,26 +988,71 @@ export class LiveAudioService {
         this._emit('onTranscription', text, true);
 
         if (isFinal && text.trim()) {
+            // Track user message for booking detection
+            this._lastUserMessage = text.trim();
+
             this._finalText += (this._finalText ? ' ' : '') + text.trim();
 
-            // Debounce: wait for user to fully stop, then send
-            if (this._sendTimer) clearTimeout(this._sendTimer);
-            this._sendTimer = setTimeout(() => {
-                const toSend = this._finalText.trim();
-                this._finalText = '';
-                if (!toSend) return;
-
-                // Record user transcript (async, fire-and-forget)
-                const timestampMs = (Date.now() - this._recordingStartTime);
-                this._recordTranscript('user', toSend, timestampMs);
-
-                console.log(`[LA] 📝 Sending: "${toSend}" [via ${this._sttProvider}]`);
-                this._lastSendTime = Date.now();
-                this._lastAudioRcvTime = 0;
-                this._emit('onTranscription', toSend, true);
-                this._sendToGemini(toSend);
-            }, SEND_DEBOUNCE_MS);
+            // 🎯 SENTENCE-BY-SENTENCE SENDING: Don't wait for debounce if we have complete sentences
+            const hasSentenceEnd = /[.!?།]/g.test(this._finalText);
+            
+            if (hasSentenceEnd) {
+                // Split by sentence boundaries and send complete sentences immediately
+                const sentences = this._finalText
+                    .split(/(?<=[.!?།])\s+/)
+                    .filter(s => s.trim());
+                
+                let remaining = '';
+                sentences.forEach((sentence, idx) => {
+                    const hasPunctuation = /[.!?།]$/.test(sentence);
+                    if (hasPunctuation) {
+                        // Complete sentence → send immediately
+                        this._sendMessage(sentence.trim());
+                    } else {
+                        // Incomplete (shouldn't happen, but keep for safety)
+                        remaining = sentence;
+                    }
+                });
+                
+                this._finalText = remaining;
+                
+                // If we still have partial text, set debounce for it
+                if (remaining.trim()) {
+                    if (this._sendTimer) clearTimeout(this._sendTimer);
+                    this._sendTimer = setTimeout(() => {
+                        const toSend = this._finalText.trim();
+                        this._finalText = '';
+                        if (toSend) this._sendMessage(toSend);
+                    }, SEND_DEBOUNCE_MS);
+                }
+            } else {
+                // No sentence end → use debounce as fallback
+                if (this._sendTimer) clearTimeout(this._sendTimer);
+                this._sendTimer = setTimeout(() => {
+                    const toSend = this._finalText.trim();
+                    this._finalText = '';
+                    if (toSend) this._sendMessage(toSend);
+                }, SEND_DEBOUNCE_MS);
+            }
         }
+    }
+
+    _sendMessage(text) {
+        if (!text.trim()) return;
+
+        // Add to conversation history
+        this._conversationHistory.push({ role: 'user', text: text.trim() });
+        console.log(`[LA] 📚 Added to history: USER: "${text.trim()}" (total: ${this._conversationHistory.length} messages)`);
+
+        // Record user transcript (async, fire-and-forget)
+        const timestampMs = (Date.now() - this._recordingStartTime);
+        this._recordTranscript('user', text.trim(), timestampMs);
+
+        console.log(`[LA] 📝 Sending: "${text.trim()}" [via ${this._sttProvider}]`);
+        this._lastSendTime = Date.now();
+        this._lastAudioRcvTime = 0;
+        this._emit('onTranscription', text.trim(), true);
+        this._sendToGemini(text.trim());
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1040,10 +1113,18 @@ export class LiveAudioService {
             const elapsed = ((Date.now() - this._sessionStartTime) / 1000).toFixed(0);
             console.log(`[LA] ✅ Turn #${this._turnCount} (${elapsed}s) [${this._sttProvider}]`);
             this._emit('onTurnComplete');
+            
+            // ✅ ONLY check for booking when turn is COMPLETE (not for partial transcriptions)
+            this._checkAndProcessBooking();
         }
 
         const otx = sc.outputTranscription || sc.output_transcription;
         if (otx?.text) {
+            // Track agent message for booking detection
+            this._lastAgentMessage = otx.text;
+            this._conversationHistory.push({ role: 'agent', text: otx.text });
+            console.log(`[LA] 📚 Added to history: AGENT: "${otx.text}" (total: ${this._conversationHistory.length} messages)`);
+            
             // Record agent transcript (async, fire-and-forget)
             const timestampMs = (Date.now() - this._recordingStartTime);
             this._recordTranscript('agent', otx.text, timestampMs);
@@ -1051,6 +1132,7 @@ export class LiveAudioService {
             if (!this._discardUntilNewTurn && this._mode === 'chat') {
                 this._emit('onTranscription', otx.text, false);
             }
+            
             if (otx.text.includes('[END_CALL]')) {
                 this._emit('onCallEnd');
             }
@@ -1090,6 +1172,12 @@ export class LiveAudioService {
             if (this._micCtx?.state === 'suspended') this._micCtx.resume();
             if (!this._live || this._muted) return;
 
+            // 🔇 ECHO CANCELLATION: Don't send audio to STT while agent is speaking
+            // This prevents the agent's own speech from being recognized as user input
+            if (this._playing) {
+                return;  // Mute mic input during agent playback
+            }
+
             const f32 = ev.data;
             const i16 = f32ToI16(f32);
 
@@ -1113,6 +1201,93 @@ export class LiveAudioService {
         if (this._worklet) { try { this._worklet.disconnect(); } catch (_) {} }
         if (this._stream) { this._stream.getTracks().forEach(t => t.stop()); this._stream = null; }
         this._source = null;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BOOKING DETECTION & PROCESSING
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    async _checkAndProcessBooking() {
+        // Only process if agent is configured with hospital booking
+        console.log('[LA] 🔍 Booking Check:', {
+            hospital_config_exists: !!this._cfg?.hospital_config,
+            enabled: this._cfg?.hospital_config?.enabled,
+            agent_id: this._cfg?.id,
+        });
+        
+        if (!this._cfg?.hospital_config?.enabled) {
+            if (this._cfg?.hospital_config) {
+                console.log('[LA] ⚠️ Hospital config exists but NOT enabled');
+            } else {
+                console.log('[LA] ⚠️ No hospital_config in agent config');
+            }
+            return;
+        }
+
+        try {
+            console.log('[LA] ✅ Booking enabled! Processing...');
+            const bookingResult = await this._callBookingProcessor();
+            
+            console.log('[LA] Booking result:', {
+                should_book: bookingResult.should_book,
+                booking_detected: bookingResult.booking_detected,
+                status: bookingResult.status,
+                error: bookingResult.error,
+                message: bookingResult.message
+            });
+            
+            if (bookingResult.should_book && bookingResult.status.includes('Appointment booked')) {
+                console.log('[LA] ✅ Appointment confirmed and saved to Sheet!');
+                this._emit('onBookingSuccess', bookingResult);
+            } else if (bookingResult.booking_detected && !bookingResult.should_book) {
+                // Booking intent detected but incomplete data
+                console.log('[LA] ⏳ Booking detected but incomplete - waiting for: ' + bookingResult.error);
+                console.log('[LA] Message to user: ' + bookingResult.message);
+            } else if (bookingResult.error) {
+                console.log('[LA] ⚠️ Booking issue: ' + bookingResult.error);
+            }
+        } catch (e) {
+            console.warn('[LA] Booking processor error:', e.message);
+            // Non-fatal - continue call
+        }
+    }
+
+    async _callBookingProcessor() {
+        const API = getAPIBase();
+        const payload = {
+            agent_id: this._cfg?.id,
+            user_message: this._lastUserMessage,
+            agent_response: this._lastAgentMessage,
+            conversation_history: this._conversationHistory.slice(-20), // Last 20 messages
+            session_id: this._sessionId, // Unique session ID to prevent duplicate bookings
+        };
+        
+        console.log('[LA] 📨 Sending booking request:', {
+            agent_id: payload.agent_id,
+            session_id: payload.session_id,
+            user_message: payload.user_message,
+            agent_response: payload.agent_response,
+            history_messages: payload.conversation_history.length,
+            history_preview: payload.conversation_history.slice(-3).map(m => `${m.role}: ${m.text.substring(0, 50)}...`)
+        });
+        
+        // 🐛 DEBUG: Log full history for debugging phone extraction
+        console.log('[LA] 📋 FULL CONVERSATION HISTORY:');
+        payload.conversation_history.forEach((msg, idx) => {
+            console.log(`  [${idx}] ${msg.role.toUpperCase()}: ${msg.text}`);
+        });
+        
+        const response = await fetch(`${API}/booking/detect-and-process`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        return await response.json();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

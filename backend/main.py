@@ -174,6 +174,7 @@ from routers.widget import router as widget_router
 from routers.analytics import router as analytics_router
 from routers.call_history import router as call_history_router
 from routers.hospital import router as hospital_router
+from routers.booking_processor import router as booking_processor_router
 from services.gemini_service import AVAILABLE_VOICES
 import os
 import logging
@@ -193,13 +194,15 @@ app = FastAPI(
 
 # ─── CORS ─────────────────────────────────────────────────
 # Get allowed origins from environment variable
-# Default: localhost for development + Vercel production
+# Default: localhost for development + Vercel production + Render widget
 # For production: set ALLOWED_ORIGINS env var (comma-separated)
 DEFAULT_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:3000",
     "http://localhost:4173",
-    "https://call-agent-sm-l9au4nss7-phoneix496-8660s-projects.vercel.app",
+    "https://call-agent-sm-es.vercel.app",  # Production frontend
+    "https://call-agent-sm-l9au4nss7-phoneix496-8660s-projects.vercel.app",  # Old/backup frontend
+    "https://*.vercel.app",  # Any Vercel subdomain
 ]
 allowed_origins_str = os.getenv("ALLOWED_ORIGINS", ",".join(DEFAULT_ORIGINS))
 allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
@@ -280,6 +283,7 @@ app.include_router(widget_router)
 app.include_router(analytics_router)
 app.include_router(call_history_router)
 app.include_router(hospital_router)
+app.include_router(booking_processor_router)
 
 
 # ─── Startup ──────────────────────────────────────────────

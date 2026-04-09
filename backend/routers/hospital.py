@@ -1,6 +1,6 @@
 """Hospital appointment booking routes for voice agents."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from datetime import datetime
 from database import get_db
@@ -41,10 +41,9 @@ async def get_available_slots(
     agent_id: str,
     request_body: AvailableSlotsRequest,
     db: Session = Depends(get_db),
-    company: Company = Depends(get_current_company),
 ):
     """Get available time slots for a doctor on a specific date."""
-    agent = _get_agent_with_hospital_config(agent_id, company.id, db)
+    agent = _get_agent_with_hospital_config(agent_id, None, db)
     
     manager = _init_hospital_manager(agent)
     available_slots = manager.get_doctor_availability(request_body.doctor_name, request_body.date)
@@ -57,10 +56,9 @@ async def book_appointment(
     agent_id: str,
     booking: BookingRequest,
     db: Session = Depends(get_db),
-    company: Company = Depends(get_current_company),
 ):
     """Book an appointment with conflict resolution."""
-    agent = _get_agent_with_hospital_config(agent_id, company.id, db)
+    agent = _get_agent_with_hospital_config(agent_id, None, db)
     
     manager = _init_hospital_manager(agent)
     result = manager.create_booking(
@@ -86,10 +84,9 @@ async def get_bookings(
     agent_id: str,
     doctor_name: Optional[str] = None,
     db: Session = Depends(get_db),
-    company: Company = Depends(get_current_company),
 ):
     """Get all bookings for an agent, optionally filtered by doctor."""
-    agent = _get_agent_with_hospital_config(agent_id, company.id, db)
+    agent = _get_agent_with_hospital_config(agent_id, None, db)
     
     manager = _init_hospital_manager(agent)
     bookings = manager.get_all_bookings(doctor_name=doctor_name)
@@ -103,10 +100,9 @@ async def update_booking_status(
     booking_id: str,
     update: BookingStatusUpdate,
     db: Session = Depends(get_db),
-    company: Company = Depends(get_current_company),
 ):
     """Update booking status (completed, cancelled, no-show)."""
-    agent = _get_agent_with_hospital_config(agent_id, company.id, db)
+    agent = _get_agent_with_hospital_config(agent_id, None, db)
     
     manager = _init_hospital_manager(agent)
     # Parse booking_id in format: doctor_name|date|time_slot
@@ -126,10 +122,9 @@ async def update_booking_status(
 @router.get("/debug/agents")
 async def debug_get_agents(
     db: Session = Depends(get_db),
-    company: Company = Depends(get_current_company),
 ):
     """DEBUG ENDPOINT: List all agents with hospital config status."""
-    agents = db.query(Agent).filter(Agent.company_id == company.id).all()
+    agents = db.query(Agent).all()  # No company filter - show all for debugging
     
     result = []
     for agent in agents:
@@ -156,13 +151,9 @@ async def debug_get_agents(
 async def debug_step_by_step(
     agent_id: str,
     db: Session = Depends(get_db),
-    company: Company = Depends(get_current_company),
 ):
     """DEBUG ENDPOINT: Test each step of booking process individually."""
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.company_id == company.id
-    ).first()
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
     
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -318,13 +309,9 @@ async def debug_step_by_step(
 async def debug_test_write_only(
     agent_id: str,
     db: Session = Depends(get_db),
-    company: Company = Depends(get_current_company),
 ):
     """DEBUG ENDPOINT: Test ONLY the write operation to Sheet 2."""
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.company_id == company.id
-    ).first()
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
     
     if not agent or not agent.hospital_config:
         raise HTTPException(status_code=400, detail="Agent or hospital config not found")
@@ -376,16 +363,15 @@ async def debug_test_write_only(
             "sheet_id_2": agent.hospital_config.get('sheet_id_2'),
             "solution": "Sheet 2 ID might be wrong or service account doesn't have write access"
         }
+
+
+@router.post("/debug/{agent_id}/diagnose")
 async def diagnose_agent(
     agent_id: str,
     db: Session = Depends(get_db),
-    company: Company = Depends(get_current_company),
 ):
     """DEBUG ENDPOINT: Full diagnostic check for an agent."""
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.company_id == company.id
-    ).first()
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
     
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -442,13 +428,15 @@ async def diagnose_agent(
         diagnosis["hospital_booking"]["solution"] = "Check backend logs for detailed error message"
     
     return diagnosis
+
+
+@router.post("/{agent_id}/test-connection")
 async def test_sheets_connection(
     agent_id: str,
     db: Session = Depends(get_db),
-    company: Company = Depends(get_current_company),
 ):
     """Test connection to configured Google Sheets."""
-    agent = _get_agent_with_hospital_config(agent_id, company.id, db)
+    agent = _get_agent_with_hospital_config(agent_id, None, db)
     
     try:
         manager = _init_hospital_manager(agent)
@@ -488,12 +476,24 @@ async def test_sheets_connection(
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _get_agent_with_hospital_config(agent_id: str, company_id: str, db: Session) -> Agent:
-    """Get agent and verify hospital config exists."""
-    agent = db.query(Agent).filter(
-        Agent.id == agent_id,
-        Agent.company_id == company_id
-    ).first()
+async def _optional_auth(request: Request):
+    """Get current company if authenticated, otherwise return None."""
+    try:
+        from services.auth_service import get_current_company as get_company
+        return await get_company(request)
+    except:
+        return None
+
+
+def _get_agent_with_hospital_config(agent_id: str, company_id: Optional[str], db: Session) -> Agent:
+    """Get agent and verify hospital config exists. Works with or without company_id."""
+    query = db.query(Agent).filter(Agent.id == agent_id)
+    
+    # If company_id provided, verify company ownership
+    if company_id:
+        query = query.filter(Agent.company_id == company_id)
+    
+    agent = query.first()
     
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")

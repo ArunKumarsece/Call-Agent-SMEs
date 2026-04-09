@@ -89,12 +89,16 @@ class HospitalBookingManager:
 
     def get_doctor_availability(self, doctor_name: str, date: str) -> List[str]:
         """
-        Get available time slots for a doctor on a specific date.
-        Intelligently parses Sheet 1 regardless of structure.
+        Get TRULY available time slots for a doctor on a specific date.
+        This checks both:
+        1. Doctor's configured available times (from Sheet 1)
+        2. Already booked slots (from Sheet 2)
+        
+        Returns only slots that are both configured AND not yet booked.
         
         Args:
             doctor_name: Name of the doctor
-            date: Date in YYYY-MM-DD format
+            date: Date in YYYY-MM-DD format (e.g., "2026-04-15")
             
         Returns:
             List of available time slots (e.g., ["09:00", "09:30", "10:00"])
@@ -103,7 +107,7 @@ class HospitalBookingManager:
             return []
 
         try:
-            # Read Sheet 1 (Master data)
+            # STEP 1: Get configured available times from Sheet 1
             result = self.sheets_service.spreadsheets().values().get(
                 spreadsheetId=self.sheet_id_master,
                 range="Sheet1!A:Z"  # Read all columns
@@ -129,7 +133,33 @@ class HospitalBookingManager:
                             available_slots = [t.strip() for t in times if t.strip()]
                         break
             
-            return available_slots
+            logger.info(f"📅 Doctor {doctor_name} has {len(available_slots)} configured slots: {available_slots}")
+            
+            # STEP 2: Get already booked slots from Sheet 2
+            booked_slots = []
+            try:
+                result2 = self.sheets_service.spreadsheets().values().get(
+                    spreadsheetId=self.sheet_id_bookings,
+                    range="Sheet1!A:D"  # Doctor | Date | Time | Patient
+                ).execute()
+                
+                booking_rows = result2.get('values', [])[1:]  # Skip header
+                
+                for booking in booking_rows:
+                    if (len(booking) >= 3 and 
+                        booking[0].strip().lower() == doctor_name.lower() and
+                        booking[1].strip() == date):
+                        booked_slots.append(booking[2].strip())
+                        logger.info(f"  ⏳ Slot {booking[2].strip()} already booked")
+            except Exception as e:
+                logger.warning(f"Could not check booked slots: {e}")
+            
+            # STEP 3: Return available slots that are NOT booked
+            free_slots = [slot for slot in available_slots if slot not in booked_slots]
+            logger.info(f"✅ Free slots for {doctor_name} on {date}: {free_slots}")
+            
+            return free_slots
+            
         except Exception as e:
             logger.error(f"Error fetching doctor availability: {e}")
             return []

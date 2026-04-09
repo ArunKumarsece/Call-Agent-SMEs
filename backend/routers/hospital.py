@@ -21,7 +21,6 @@ class BookingRequest(BaseModel):
     date: str  # YYYY-MM-DD
     time_slot: str  # HH:MM
     patient_name: str
-    patient_phone: str
     reason: Optional[str] = None
 
 
@@ -66,7 +65,6 @@ async def book_appointment(
         date=booking.date,
         time_slot=booking.time_slot,
         patient_name=booking.patient_name,
-        patient_phone=booking.patient_phone,
         reason=booking.reason or "General checkup"
     )
     

@@ -513,8 +513,7 @@ def _extract_booking_details(text: str, history: list) -> dict:
         r"(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})",  # April 15
         r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",  # Day names: Friday, Monday, etc
         r"(next\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))",  # next Monday
-        r"(tomorrow|today)",  # Relative dates
-        r"(naalaiku|naalai)",  # Tamil: tomorrow
+        r"(tomorrow|today|nalaiku|naalai)",  # Relative dates (tomorrow, today, Tamil: nalaiku)
     ]
     
     # Try YYYY-MM-DD first
@@ -543,13 +542,33 @@ def _extract_booking_details(text: str, history: list) -> dict:
                 details["date"] = day_match.group(1).capitalize()
                 logger.info(f"  ✅ Found date (Day name): {details['date']}")
             else:
-                # Try other patterns
-                for pattern in date_patterns[4:]:
-                    match = re.search(pattern, full_history_lower, re.IGNORECASE)
-                    if match:
-                        details["date"] = match.group(1)
-                        logger.info(f"  ✅ Found date (keyword): {details['date']}")
-                        break
+                # Try relative dates (tomorrow, today, nalaiku/naalai)
+                relative_match = re.search(
+                    r"(tomorrow|today|nalaiku|naalai)",
+                    full_history_lower, re.IGNORECASE
+                )
+                if relative_match:
+                    relative_keyword = relative_match.group(1).lower()
+                    from datetime import timedelta
+                    
+                    if relative_keyword in ["tomorrow", "nalaiku", "naalai"]:
+                        # Calculate tomorrow's date
+                        tomorrow = datetime.now() + timedelta(days=1)
+                        details["date"] = tomorrow.strftime("%Y-%m-%d")
+                        logger.info(f"  ✅ Found date (tomorrow): {details['date']}")
+                    elif relative_keyword == "today":
+                        # Today's date
+                        today = datetime.now()
+                        details["date"] = today.strftime("%Y-%m-%d")
+                        logger.info(f"  ✅ Found date (today): {details['date']}")
+                else:
+                    # Try other patterns as fallback
+                    for pattern in date_patterns[4:]:
+                        match = re.search(pattern, full_history_lower, re.IGNORECASE)
+                        if match and "tomorrow" not in str(match.group(1)).lower() and "today" not in str(match.group(1)).lower():
+                            details["date"] = match.group(1)
+                            logger.info(f"  ✅ Found date (keyword): {details['date']}")
+                            break
     
     # ─────────────────────────────────────────────────────────────
     # TIME EXTRACTION - Search entire history

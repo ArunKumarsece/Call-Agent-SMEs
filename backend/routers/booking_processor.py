@@ -450,6 +450,74 @@ def _analyze_booking_conversation(user_msg: str, agent_msg: str, history: list) 
     }
 
 
+def _format_date_to_iso(date_str: str) -> Optional[str]:
+    """
+    Convert any date format to ISO format (YYYY-MM-DD).
+    Handles:
+    - Already formatted: 2026-04-15
+    - Relative: tomorrow, today, naalaiku, naalai
+    - Day names: Monday, Friday, etc
+    - Month+Day: April 15, May 20
+    
+    Returns: YYYY-MM-DD format or None if can't parse
+    """
+    from datetime import timedelta, datetime
+    
+    if not date_str:
+        return None
+    
+    date_lower = date_str.lower().strip()
+    
+    # Already in YYYY-MM-DD format
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', date_lower):
+        return date_lower
+    
+    # Relative dates: tomorrow, today, naalaiku (Tamil for tomorrow), naalai
+    if date_lower in ["tomorrow", "naalaiku", "naalai"]:
+        tomorrow = datetime.now() + timedelta(days=1)
+        return tomorrow.strftime("%Y-%m-%d")
+    
+    if date_lower == "today":
+        return datetime.now().strftime("%Y-%m-%d")
+    
+    # Day names: Monday, Friday, etc - get next occurrence
+    day_map = {
+        "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+        "friday": 4, "saturday": 5, "sunday": 6
+    }
+    
+    if date_lower in day_map:
+        target_day = day_map[date_lower]
+        today = datetime.now()
+        current_day = today.weekday()
+        days_ahead = (target_day - current_day) % 7
+        if days_ahead == 0:
+            days_ahead = 7  # If it's today, schedule for next week
+        target_date = today + timedelta(days=days_ahead)
+        return target_date.strftime("%Y-%m-%d")
+    
+    # Month + Day format: April 15, May 20
+    month_day_match = re.match(
+        r"(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})",
+        date_lower, re.IGNORECASE
+    )
+    if month_day_match:
+        month_name = month_day_match.group(1)
+        day = month_day_match.group(2)
+        # Assume current year
+        try:
+            date_obj = datetime.strptime(f"{month_name} {day} {datetime.now().year}", "%B %d %Y")
+            # If date is in the past, assume next year
+            if date_obj < datetime.now():
+                date_obj = date_obj.replace(year=date_obj.year + 1)
+            return date_obj.strftime("%Y-%m-%d")
+        except:
+            pass
+    
+    # Couldn't parse - return as-is (might be handled elsewhere)
+    return None
+
+
 def _extract_booking_details(text: str, history: list) -> dict:
     """
     Extract booking details from conversation text AND history.
@@ -505,70 +573,29 @@ def _extract_booking_details(text: str, history: list) -> dict:
                 break
     
     # ─────────────────────────────────────────────────────────────
-    # DATE EXTRACTION - Search entire history  
+    # DATE EXTRACTION - Convert ANY format to YYYY-MM-DD  
     # ─────────────────────────────────────────────────────────────
     date_patterns = [
         r"(\d{4}-\d{2}-\d{2})",  # YYYY-MM-DD format like 2026-04-15
         r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",  # DD/MM/YYYY or similar
         r"(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})",  # April 15
         r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",  # Day names: Friday, Monday, etc
-        r"(next\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))",  # next Monday
-        r"(tomorrow|today|nalaiku|naalai)",  # Relative dates (tomorrow, today, Tamil: nalaiku)
+        r"(tomorrow|today|nalaiku|naalai)",  # Relative dates (tomorrow, today, Tamil: nalaiku, naalai)
     ]
     
-    # Try YYYY-MM-DD first
-    match = re.search(date_patterns[0], full_history_lower)
-    if match:
-        details["date"] = match.group(1)
-        logger.info(f"  ✅ Found date (YYYY-MM-DD): {details['date']}")
-    else:
-        # Try Month + Day pattern
-        month_day_match = re.search(
-            r"(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})",
-            full_history_lower, re.IGNORECASE
-        )
-        if month_day_match:
-            month = month_day_match.group(1).capitalize()
-            day = month_day_match.group(2)
-            details["date"] = f"{month} {day}"
-            logger.info(f"  ✅ Found date (Month Day): {details['date']}")
-        else:
-            # Try day name (Friday, Monday, etc.)
-            day_match = re.search(
-                r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
-                full_history_lower, re.IGNORECASE
-            )
-            if day_match:
-                details["date"] = day_match.group(1).capitalize()
-                logger.info(f"  ✅ Found date (Day name): {details['date']}")
-            else:
-                # Try relative dates (tomorrow, today, nalaiku/naalai)
-                relative_match = re.search(
-                    r"(tomorrow|today|nalaiku|naalai)",
-                    full_history_lower, re.IGNORECASE
-                )
-                if relative_match:
-                    relative_keyword = relative_match.group(1).lower()
-                    from datetime import timedelta
-                    
-                    if relative_keyword in ["tomorrow", "nalaiku", "naalai"]:
-                        # Calculate tomorrow's date
-                        tomorrow = datetime.now() + timedelta(days=1)
-                        details["date"] = tomorrow.strftime("%Y-%m-%d")
-                        logger.info(f"  ✅ Found date (tomorrow): {details['date']}")
-                    elif relative_keyword == "today":
-                        # Today's date
-                        today = datetime.now()
-                        details["date"] = today.strftime("%Y-%m-%d")
-                        logger.info(f"  ✅ Found date (today): {details['date']}")
-                else:
-                    # Try other patterns as fallback
-                    for pattern in date_patterns[4:]:
-                        match = re.search(pattern, full_history_lower, re.IGNORECASE)
-                        if match and "tomorrow" not in str(match.group(1)).lower() and "today" not in str(match.group(1)).lower():
-                            details["date"] = match.group(1)
-                            logger.info(f"  ✅ Found date (keyword): {details['date']}")
-                            break
+    # Try each pattern and format found dates to YYYY-MM-DD
+    for pattern in date_patterns:
+        matches = re.finditer(pattern, full_history_lower, re.IGNORECASE)
+        for match in matches:
+            found_date = match.group(1) if match.lastindex else match.group(0)
+            formatted = _format_date_to_iso(found_date)
+            if formatted:
+                details["date"] = formatted
+                logger.info(f"  ✅ Found date: '{found_date}' → Formatted to: {details['date']}")
+                break
+        if details["date"]:
+            break
+    
     
     # ─────────────────────────────────────────────────────────────
     # TIME EXTRACTION - Search entire history

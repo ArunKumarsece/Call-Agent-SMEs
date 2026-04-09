@@ -162,7 +162,7 @@ class HospitalBookingManager:
             
             # Check if headers exist and are correct
             expected_headers = ['Doctor Name', 'Date', 'Time Slot', 'Patient Name', 
-                              'Patient Phone', 'Reason', 'Created At', 'Status']
+                              'Reason', 'Created At', 'Status']
             
             if not headers or headers != expected_headers:
                 logger.info(f"🔧 Updating headers from {headers} to {expected_headers}")
@@ -236,7 +236,7 @@ class HospitalBookingManager:
             return False
 
     def create_booking(self, doctor_name: str, date: str, time_slot: str, 
-                      patient_name: str, patient_phone: str, reason: str) -> Dict[str, Any]:
+                      patient_name: str, reason: str) -> Dict[str, Any]:
         """
         Create a new appointment booking in Sheet 2 with atomic write.
         Auto-creates Sheet 2 structure if needed.
@@ -246,7 +246,6 @@ class HospitalBookingManager:
             date: Date in YYYY-MM-DD format
             time_slot: Time in HH:MM format
             patient_name: Patient name
-            patient_phone: Patient phone
             reason: Reason for appointment
             
         Returns:
@@ -305,7 +304,7 @@ class HospitalBookingManager:
             # STEP 3: Prepare booking data
             logger.info("\n📝 [STEP 3/4] Preparing booking data...")
             booking_data = [
-                [doctor_name, date, time_slot, patient_name, patient_phone, reason, 
+                [doctor_name, date, time_slot, patient_name, reason, 
                  datetime.now().isoformat(), "scheduled"]
             ]
             logger.info(f"Booking row: {booking_data[0]}")

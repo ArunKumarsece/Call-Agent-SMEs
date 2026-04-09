@@ -153,17 +153,15 @@ async def detect_and_process_booking(request: BookingProcessRequest):
         logger.info(f"  Date: {date}")
         logger.info(f"  Time: {time}")
         logger.info(f"  Patient: {patient_name}")
-        logger.info(f"  Phone: {patient_phone}")
         logger.info(f"  Reason: {reason}")
         
-        # Require minimal fields including phone number for patient ID
-        if not all([doctor, date, time, patient_name, patient_phone]):
+        # Require core booking fields (phone is optional)
+        if not all([doctor, date, time, patient_name]):
             missing = []
             if not doctor: missing.append("doctor")
             if not date: missing.append("date")
             if not time: missing.append("time")
             if not patient_name: missing.append("patient_name")
-            if not patient_phone: missing.append("patient_phone")
             
             logger.warning(f"⚠️  Incomplete booking details - Missing: {missing}")
             return BookingResult(
@@ -240,7 +238,6 @@ async def detect_and_process_booking(request: BookingProcessRequest):
             logger.info(f"  - date: {date}")
             logger.info(f"  - time_slot: {time}")
             logger.info(f"  - patient_name: {patient_name}")
-            logger.info(f"  - patient_phone: {patient_phone}")
             logger.info(f"  - reason: {reason}")
             
             result = manager.create_booking(
@@ -248,7 +245,6 @@ async def detect_and_process_booking(request: BookingProcessRequest):
                 date=date,
                 time_slot=time,
                 patient_name=patient_name,
-                patient_phone=patient_phone or "Not provided",
                 reason=reason or "Appointment"
             )
             
@@ -269,11 +265,10 @@ async def detect_and_process_booking(request: BookingProcessRequest):
                 status_msg += f"\n{availability_warning}"
             
             # Generate booking ID and mark session as booked
-            booking_id = f"{patient_phone}_{patient_name.replace(' ', '_')}_{date.replace(' ', '_')}"
+            booking_id = f"{patient_name.replace(' ', '_')}_{date.replace(' ', '_')}"
             _booking_sessions[session_id]["booked"] = True
             _booking_sessions[session_id]["booking_id"] = booking_id
             _booking_sessions[session_id]["patient_name"] = patient_name
-            _booking_sessions[session_id]["phone"] = patient_phone
             _booking_sessions[session_id]["doctor"] = doctor
             _booking_sessions[session_id]["date"] = date
             _booking_sessions[session_id]["time"] = time
@@ -633,67 +628,10 @@ def _extract_booking_details(text: str, history: list) -> dict:
                 break
     
     # ─────────────────────────────────────────────────────────────
-    # PHONE EXTRACTION - Search entire history (CRITICAL for patient ID)
-    # Must find this - it's the patient ID
+    # PHONE EXTRACTION - OPTIONAL (not used in spreadsheet anymore)
     # ─────────────────────────────────────────────────────────────
-    
-    logger.info(f"  📞 Searching for phone in {len(full_history_lower)} chars of conversation")
-    
-    # Try multiple phone patterns - be VERY aggressive
-    phone_patterns = [
-        # Just a standalone 10-digit sequence (most common - Indian mobile)
-        (r"\b(\d{10})\b", "standalone 10-digit"),
-        # Sequences of 10+ digits (catches formatted numbers)
-        (r"(\d{10,14})", "10+ digit sequence"),
-        # Phone number mentioned explicitly
-        (r"(?:phone\s+(?:number|is)?|contact\s+|call\s+|number\s+|mobile\s+|whatsapp\s+|cell\s+)[\s:]*(\+?\d[\d\s\.\-]*\d)", "explicit phone mention"),
-        # Phone with spaces/dashes
-        (r"(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})", "formatted XXX-XXX-XXXX"),
-        # International format
-        (r"(\+\d{1,3}\s*\d{1,14})", "international +91 format"),
-    ]
-    
-    for pattern, label in phone_patterns:
-        # Search through full history
-        matches = list(re.finditer(pattern, full_history_lower))
-        
-        if matches:
-            logger.info(f"    Found {len(matches)} match(es) with pattern '{label}'")
-        
-        for i, match in enumerate(matches):
-            phone_raw = match.group(1).strip()
-            logger.info(f"      Match #{i+1}: raw='{phone_raw}'")
-            
-            # Clean phone number (remove formatting, spaces, dashes)
-            phone_clean = re.sub(r'[\s\-\.\(\)]', '', phone_raw)
-            # Remove + for comparison
-            phone_digits = re.sub(r'\D', '', phone_clean)
-            
-            logger.info(f"        Cleaned: '{phone_clean}', digits='{phone_digits}' (len={len(phone_digits)})")
-            
-            # Valid phone: at least 10 digits
-            if len(phone_digits) >= 10:
-                # Use the first 10 or all if more (depends on format)
-                if len(phone_digits) > 10:
-                    # Likely international, keep all
-                    details["patient_phone"] = phone_clean
-                    logger.info(f"      ✅ ACCEPTING: International format = {phone_clean}")
-                else:
-                    # Exactly 10 digits (Indian)
-                    details["patient_phone"] = phone_digits
-                    logger.info(f"      ✅ ACCEPTING: Indian mobile = {phone_digits}")
-                
-                logger.info(f"  ✅ Found phone: {details['patient_phone']} (via {label})")
-                break
-            else:
-                logger.info(f"      ❌ REJECTED: Too short ({len(phone_digits)} digits)")
-        
-        if details["patient_phone"]:
-            logger.info(f"  ✅ Phone extraction complete!")
-            break
-    
-    if not details["patient_phone"]:
-        logger.warning(f"  ❌ No valid phone number found in entire conversation")
+    # Phone number is no longer a required field or spreadsheet column
+    # Kept for reference but not extracted or validated
     
     # ─────────────────────────────────────────────────────────────
     # REASON EXTRACTION - Search entire history
@@ -723,8 +661,7 @@ def _extract_booking_details(text: str, history: list) -> dict:
     logger.info(f"[EXTRACT]   Date: {details.get('date') or '❌ NOT FOUND'}")
     logger.info(f"[EXTRACT]   Time: {details.get('time') or '❌ NOT FOUND'}")
     logger.info(f"[EXTRACT]   Patient Name: {details.get('patient_name') or '❌ NOT FOUND'}")
-    logger.info(f"[EXTRACT]   Patient Phone: {details.get('patient_phone') or '❌ NOT FOUND'}")
-    logger.info(f"[EXTRACT]   Reason: {details.get('reason') or '❌ NOT FOUND'}")
+    logger.info(f"[EXTRACT]   Reason: {details.get('reason') or '❌ NOT FOUND (optional)'}")
     logger.info(f"[EXTRACT] ═══════════════════════════════════════════\n")
     
     return details
